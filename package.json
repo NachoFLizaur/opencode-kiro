@@ -1,8 +1,17 @@
 {
   "name": "opencode-kiro",
   "version": "0.1.0",
-  "description": "Kiro (Amazon Q via ACP) provider plugin for opencode — auth, models, and TUI credits",
+  "description": "The ACP-compliant Kiro plugin for opencode — auth via the official kiro-cli login, 12 Kiro models through the Agent Client Protocol, and TUI credits display",
   "license": "MIT",
+  "author": "Nacho F. Lizaur (https://github.com/NachoFLizaur)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/NachoFLizaur/opencode-kiro.git"
+  },
+  "bugs": {
+    "url": "https://github.com/NachoFLizaur/opencode-kiro/issues"
+  },
+  "homepage": "https://github.com/NachoFLizaur/opencode-kiro#readme",
   "type": "module",
   "exports": {
     "./server": {
@@ -48,7 +57,9 @@
     "opencode",
     "opencode-plugin",
     "kiro",
+    "kiro-cli",
     "acp",
+    "agent-client-protocol",
     "amazon-q",
     "aws"
   ]
