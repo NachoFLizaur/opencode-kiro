@@ -1,15 +1,17 @@
-import { describe, expect, test } from "bun:test"
-import { join } from "node:path"
-import { pathToFileURL } from "node:url"
+import { existsSync } from "node:fs"
+import { readFile } from "node:fs/promises"
+import { dirname, join } from "node:path"
+import { fileURLToPath, pathToFileURL } from "node:url"
+import { describe, expect, test } from "vitest"
 
 // Scaffold smoke tests (task 03): exercise the BUILT package contract — run
-// `bun run build` before this file. Covered contracts: exports resolution,
+// `npm run build` before this file. Covered contracts: exports resolution,
 // plugin-discoverable metadata, emitted artifacts, the loader's module-kind
 // isolation rule (opencode shared.ts:272-304), and host-package
 // externalization. Assertions target SHAPE, not stub content, so this file
 // remains the regression net once tasks 07/08 replace the stubs.
 
-const ROOT = join(import.meta.dir, "..")
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..")
 
 const distPath = (name: string): string => join(ROOT, "dist", name)
 
@@ -25,7 +27,8 @@ interface PackageJson {
   files?: string[]
 }
 
-const readPkg = (): Promise<PackageJson> => Bun.file(join(ROOT, "package.json")).json() as Promise<PackageJson>
+const readPkg = async (): Promise<PackageJson> =>
+  JSON.parse(await readFile(join(ROOT, "package.json"), "utf8")) as PackageJson
 
 /**
  * Import a built module via a runtime-computed file URL so `tsc --noEmit`
@@ -64,13 +67,10 @@ describe("scaffold package contract", () => {
     expect(pkg.files).toEqual(["dist"])
   })
 
-  test("build emits all four artifacts", async () => {
+  test("build emits all four artifacts", () => {
     const artifacts = ["server.js", "server.d.ts", "tui.js", "tui.d.ts"]
 
-    const missing: string[] = []
-    for (const artifact of artifacts) {
-      if (!(await Bun.file(distPath(artifact)).exists())) missing.push(artifact)
-    }
+    const missing = artifacts.filter((artifact) => !existsSync(distPath(artifact)))
 
     expect(missing).toEqual([])
   })
@@ -100,7 +100,7 @@ describe("scaffold package contract", () => {
     const builtModules = ["server.js", "tui.js"]
 
     for (const file of builtModules) {
-      const code = await Bun.file(distPath(file)).text()
+      const code = await readFile(distPath(file), "utf8")
       const residue = withoutImportSpecifiers(code)
 
       // Externals may appear ONLY as import specifiers — any residual

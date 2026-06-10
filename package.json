@@ -5,25 +5,49 @@
   "license": "MIT",
   "type": "module",
   "exports": {
-    "./server": { "types": "./dist/server.d.ts", "default": "./dist/server.js" },
-    "./tui": { "types": "./dist/tui.d.ts", "default": "./dist/tui.js" },
+    "./server": {
+      "types": "./dist/server.d.ts",
+      "default": "./dist/server.js"
+    },
+    "./tui": {
+      "types": "./dist/tui.d.ts",
+      "default": "./dist/tui.js"
+    },
     "./package.json": "./package.json"
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsup",
-    "test": "bun test",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
-    "prepublishOnly": "bun run build"
+    "prepublishOnly": "npm run build"
   },
-  "engines": { "opencode": ">=1.16.0" },
-  "peerDependencies": { "@opencode-ai/plugin": "*" },
-  "dependencies": { "kiro-acp-ai-provider": "file:../kiro-acp-ai-provider" },
+  "engines": {
+    "node": ">=20",
+    "opencode": ">=1.16.0"
+  },
+  "peerDependencies": {
+    "@opencode-ai/plugin": "*"
+  },
+  "dependencies": {
+    "kiro-acp-ai-provider": "file:../kiro-acp-ai-provider"
+  },
   "devDependencies": {
     "@opencode-ai/plugin": "1.16.2",
-    "bun-types": "latest",
+    "@types/node": "^20.19.42",
     "tsup": "^8.0.0",
-    "typescript": "^5.7.0"
+    "typescript": "^5.7.0",
+    "vitest": "^4.1.8"
   },
-  "keywords": ["opencode", "opencode-plugin", "kiro", "acp", "amazon-q", "aws"]
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "kiro",
+    "acp",
+    "amazon-q",
+    "aws"
+  ]
 }

@@ -9,7 +9,7 @@
     "noEmit": true,
     "resolveJsonModule": true,
     "skipLibCheck": true,
-    "types": ["bun-types"]
+    "types": ["node"]
   },
   "include": ["src", "test"],
   "exclude": ["dist", "node_modules"]
