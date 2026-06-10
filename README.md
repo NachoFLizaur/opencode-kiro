@@ -39,6 +39,8 @@ The installer reads this package's `exports` and detects both plugin entrypoints
 
 (with `--global`: `~/.config/opencode/opencode.json` and `~/.config/opencode/tui.json`)
 
+Then disable the builtin context box — see [Credits in the sidebar](#credits-in-the-sidebar).
+
 ### Manual alternative
 
 Add the package name to the `plugin` array of **both** files yourself (in the
@@ -146,6 +148,11 @@ Disable the builtin box in `tui.json` so only the replacement renders:
 Without this you will see **two** context boxes (cosmetic duplication — the builtin
 one, plus the plugin's). The credits value and its unit come from provider metadata
 emitted by the SDK (kiro-cli reports the unit); nothing is hardcoded client-side.
+
+Trade-off: the replacement box applies to **every** session and disabling the builtin
+is global — mixed-provider users lose the builtin `$X.XX spent` line for non-Kiro
+sessions too; if you need dollar cost there, leave the builtin enabled at the cost of
+the duplicate box.
 
 ## Known limitation (read this)
 
