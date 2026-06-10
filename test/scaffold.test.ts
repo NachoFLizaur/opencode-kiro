@@ -49,6 +49,17 @@ const withoutImportSpecifiers = (code: string): string =>
     (_match, keyword: string, quote: string) => `${keyword}${quote}${quote}`,
   )
 
+/**
+ * Blank standalone string literals that exactly equal the SDK package name.
+ * The server module legitimately embeds it as DATA — the seeded
+ * `cfg.provider.kiro.npm` spec that opencode's resolveSDK installs (task 07)
+ * — which is not a bundling artifact. Real bundling still trips the residue
+ * check via esbuild's UNQUOTED inlined-source path comments
+ * (e.g. `// ../kiro-acp-ai-provider/dist/index.js`).
+ */
+const withoutSdkNpmSpecLiterals = (code: string): string =>
+  code.replace(/(["'])kiro-acp-ai-provider\1/g, "$1$1")
+
 describe("scaffold package contract", () => {
   test("exports map exposes exactly ./server and ./tui subpaths", async () => {
     const pkg = await readPkg()
@@ -101,11 +112,12 @@ describe("scaffold package contract", () => {
 
     for (const file of builtModules) {
       const code = await readFile(distPath(file), "utf8")
-      const residue = withoutImportSpecifiers(code)
+      const residue = withoutSdkNpmSpecLiterals(withoutImportSpecifiers(code))
 
-      // Externals may appear ONLY as import specifiers — any residual
-      // mention (e.g. an inlined-source path comment) means the host/SDK
-      // package was bundled instead of left external.
+      // Externals may appear ONLY as import specifiers (or, for the SDK, as
+      // the seeded npm-spec data literal) — any residual mention (e.g. an
+      // inlined-source path comment) means the host/SDK package was bundled
+      // instead of left external.
       expect(residue).not.toContain("kiro-acp-ai-provider")
       expect(residue).not.toContain("@opencode-ai/plugin")
     }
