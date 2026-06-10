@@ -28,7 +28,14 @@ const tui: TuiPlugin = async (api) => {
   })
 }
 
-export default { tui }
+// `id` is REQUIRED for path/file installs: opencode's TUI runtime resolves a
+// plugin id via resolvePluginId (plugin/shared.ts:306-316), which THROWS
+// "Path plugin <spec> must export id" for file-source specs whose module
+// doesn't export one (npm-source specs fall back to the package name).
+// "opencode-kiro" matches the package name so the id is identical across
+// path and npm installs — keeping `plugin_enabled` keys and the plugin
+// manager UI stable for both install modes.
+export default { id: "opencode-kiro", tui }
 
 // Pure helpers re-exported for unit tests (task 09) and validation commands.
 // Named exports never affect the plugin loader — it reads only the default

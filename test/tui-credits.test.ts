@@ -180,12 +180,15 @@ describe("dist/tui.js module isolation", () => {
   test("tui module exports no server", async () => {
     // Namespace-level isolation (scaffold.test.ts already covers the DEFAULT
     // export's function-valued `tui` / absent `server`): the default carries
-    // ONLY `tui`, no `server` named export exists anywhere, and the pure
-    // helpers stay importable as named exports.
+    // ONLY `id` + `tui` (id is REQUIRED for path/file installs — opencode's
+    // resolvePluginId rejects file-source plugins without one), no `server`
+    // named export exists anywhere, and the pure helpers stay importable as
+    // named exports.
     const mod = await importDist("tui.js")
 
     expect("server" in mod).toBe(false)
-    expect(Object.keys(mod.default as Record<string, unknown>)).toEqual(["tui"])
+    expect(Object.keys(mod.default as Record<string, unknown>)).toEqual(["id", "tui"])
+    expect((mod.default as Record<string, unknown>).id).toBe("opencode-kiro")
     const helpers = ["creditsForMessage", "formatCredits", "messageCredits", "readPartCredits", "sumSessionCredits"]
     for (const helper of helpers) {
       expect(typeof mod[helper]).toBe("function")
