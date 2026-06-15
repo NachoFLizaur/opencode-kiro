@@ -26,7 +26,7 @@ Not affiliated with any other kiro-named npm packages.
 | Requirement | Notes |
 |---|---|
 | [kiro-cli](https://kiro.dev/docs/cli/) | Must be installed and on `PATH`; a Kiro subscription / AWS Builder ID account |
-| opencode `>= 1.16.0` | Enforced via `engines.opencode` on released builds (floor justification in [PUBLISH_CHECKLIST.md](./PUBLISH_CHECKLIST.md)). The shipped catalog must include the `kiro` provider (see [Troubleshooting](#troubleshooting)). |
+| opencode `>= 1.16.0` | Enforced via `engines.opencode` on released builds. The shipped catalog must include the `kiro` provider (see [Troubleshooting](#troubleshooting)). |
 
 ## Install
 
@@ -233,8 +233,6 @@ npm run typecheck   # tsc --noEmit
 npm run build       # tsup → dist/server.js + dist/tui.js (+ d.ts)
 npm test            # vitest
 ```
-
-See [PUBLISH_CHECKLIST.md](./PUBLISH_CHECKLIST.md) for the release runbook.
 
 ## License
 
