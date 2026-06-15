@@ -1,18 +1,23 @@
 # opencode-kiro
 
-The ACP-compliant [Kiro](https://kiro.dev) plugin for [opencode](https://opencode.ai).
+The ACP-compliant [Kiro](https://kiro.dev) auth plugin for [opencode](https://opencode.ai).
 
-A complete, fully external integration — zero opencode core changes:
+opencode learns the `kiro` provider and its 12 models from the
+[models.dev](https://models.dev) catalog — exactly like the first-party Copilot and
+GitLab integrations. This plugin supplies the piece the catalog can't: the **auth**.
 
 - **Auth** via the official `kiro-cli` login flow (`opencode auth login` → "Kiro CLI Login")
-- **Provider** with 12 Kiro models (Claude, Deepseek, MiniMax, Qwen — see [Models](#models))
-- **TUI credits display** — a sidebar context box showing tokens, context usage, and Kiro credits
+- **Provider options loader** — the `cwd`, `agent`, `trustAllTools`, `mcpTimeout` values
+  opencode forwards into the SDK factory
+- **TUI credits display** — an opt-in sidebar context box showing tokens, context usage,
+  and Kiro credits
 
-The plugin is built on [`kiro-acp-ai-provider`](https://www.npmjs.com/package/kiro-acp-ai-provider),
+The `kiro` provider resolves to [`kiro-acp-ai-provider`](https://www.npmjs.com/package/kiro-acp-ai-provider),
 an AI-SDK provider that talks to your locally installed `kiro-cli` over Kiro's
-[Agent Client Protocol](https://agentclientprotocol.com) (ACP). This is the supported
-integration path: requests go through kiro-cli exactly like Kiro's own IDE clients —
-no credential scraping, no reuse of Kiro credentials against other providers.
+[Agent Client Protocol](https://agentclientprotocol.com) (ACP) — opencode picks it up from
+the catalog's `npm` field. This is the supported integration path: requests go through
+kiro-cli exactly like Kiro's own IDE clients — no credential scraping, no reuse of Kiro
+credentials against other providers.
 
 Not affiliated with any other kiro-named npm packages.
 
@@ -21,7 +26,7 @@ Not affiliated with any other kiro-named npm packages.
 | Requirement | Notes |
 |---|---|
 | [kiro-cli](https://kiro.dev/docs/cli/) | Must be installed and on `PATH`; a Kiro subscription / AWS Builder ID account |
-| opencode `>= 1.16.0` | Enforced via `engines.opencode` on released builds (floor justification in [PUBLISH_CHECKLIST.md](./PUBLISH_CHECKLIST.md)) |
+| opencode `>= 1.16.0` | Enforced via `engines.opencode` on released builds (floor justification in [PUBLISH_CHECKLIST.md](./PUBLISH_CHECKLIST.md)). The shipped catalog must include the `kiro` provider (see [Troubleshooting](#troubleshooting)). |
 
 ## Install
 
@@ -34,12 +39,14 @@ opencode plugin opencode-kiro
 The installer reads this package's `exports` and detects both plugin entrypoints
 (`./server` and `./tui`), then patches **both** config files automatically:
 
-- `.opencode/opencode.json` — the server plugin (auth + provider)
+- `.opencode/opencode.json` — the server plugin (auth)
 - `.opencode/tui.json` — the TUI plugin (credits sidebar box)
 
 (with `--global`: `~/.config/opencode/opencode.json` and `~/.config/opencode/tui.json`)
 
-Then disable the builtin context box — see [Credits in the sidebar](#credits-in-the-sidebar).
+You do **not** add a `provider.kiro` block — opencode loads the `kiro` provider and its
+models straight from the models.dev catalog. Then disable the builtin context box — see
+[Credits in the sidebar](#credits-in-the-sidebar).
 
 ### Manual alternative
 
@@ -85,6 +92,18 @@ path-sourced TUI plugins **must export an `id`** (opencode rejects them otherwis
 this package ships `{ id: "opencode-kiro", tui }`, so the id — and your
 `plugin_enabled` keys — are identical across path and npm installs.
 
+Because the provider now comes from the catalog rather than the plugin, a local checkout
+also needs a catalog that includes `kiro`. opencode reads its catalog from
+`OPENCODE_MODELS_PATH` when set; point it at an `api.json` that contains the `kiro`
+provider (for example one generated from a [models.dev](https://models.dev) checkout):
+
+```bash
+OPENCODE_MODELS_PATH=/path/to/api.json opencode models | grep '^kiro/'
+```
+
+Until the catalog opencode loads contains `kiro`, the provider will not appear regardless
+of this plugin being installed (the plugin only adds auth, not the provider definition).
+
 ## Auth
 
 ```bash
@@ -101,11 +120,16 @@ Select the **Kiro (plugin)** provider, then the **Kiro CLI Login** method:
 If the flow times out, authenticate directly with kiro-cli (`kiro-cli login`) and run
 `opencode auth login` again — the fast path then completes immediately.
 
+> **Note:** opencode will also surface `kiro` if the `KIRO_API_KEY` environment variable
+> is set, because the catalog entry declares `env: ["KIRO_API_KEY"]`. The intended auth
+> path for this plugin is still **Kiro CLI Login** above (it reuses your local kiro-cli
+> session); the env var is a secondary route opencode offers for any catalog provider.
+
 ## Models
 
-12 models, generated from the SDK's static catalog (`KIRO_MODEL_DEFAULTS`, sourced from
-the models.dev kiro catalog data). All models support tool calling and have a 64K-token
-output limit.
+12 models, defined in the [models.dev](https://models.dev) `kiro` catalog entry. opencode
+loads them from there — the table below is a convenience snapshot, not the source of
+truth. All models support tool calling and have a 64K-token output limit.
 
 | Model | ID | Context window | Image input |
 |---|---|---|---|
@@ -158,23 +182,25 @@ the duplicate box.
 
 **Credits display is TUI-sidebar-only.** Every other cost surface — the prompt footer,
 ACP clients, the web app, desktop, web share pages, and CLI cost output — shows $0.00
-for Kiro sessions. Those surfaces render dollar cost computed by opencode core from
-per-token pricing, which doesn't exist for a subscription-metered provider. A
-cross-surface credits display requires opencode core changes and is intentionally out
-of scope for this plugin.
+for Kiro sessions. The models.dev catalog declares Kiro's per-token `cost` as 0 (it is a
+subscription-metered provider with no per-token pricing), so opencode core computes $0.00
+everywhere it renders dollar cost. That is expected, not a defect. A cross-surface credits
+display would require opencode core changes and is intentionally out of scope for this
+plugin.
 
 ## How it works
 
-- **Provider seeding (`config` hook)**: the server plugin seeds `provider.kiro`
-  (npm spec + the 12 models) into opencode's config before provider init reads it.
-  This ordering is codified upstream ("load plugins first so config() hook runs before
-  reading cfg.provider"), but it is not a documented public API — prefer released
-  opencode versions that satisfy the `engines.opencode` floor, and pin your opencode
-  and plugin versions if you need certainty across upgrades.
-- **Dynamic SDK install (resolveSDK)**: on first model use, opencode installs
-  `kiro-acp-ai-provider` from npm into its package cache and imports it; the plugin's
-  `auth` loader supplies the provider options (`cwd`, `agent`, `trustAllTools`,
-  `mcpTimeout`) that opencode forwards into `createKiroAcp(...)`.
+- **Provider & models (models.dev)**: opencode loads the `kiro` provider and its full
+  model list from the models.dev catalog. This plugin does **not** define any provider or
+  model config of its own — there is no `config` hook.
+- **SDK resolution (resolveSDK)**: opencode reads the catalog's `npm` field
+  (`kiro-acp-ai-provider`), installs that package into its package cache on first model
+  use, and imports it. This plugin's `auth` loader supplies the provider options
+  (`cwd`, `agent`, `trustAllTools`, `mcpTimeout`) that opencode forwards into
+  `createKiroAcp(...)`.
+- **Auth (this plugin)**: registers the "Kiro CLI Login" OAuth method (kiro-cli login
+  flow) plus the options loader above. The same plugin also imports `verifyAuth` from
+  `kiro-acp-ai-provider` to check kiro-cli installation/login state.
 - **Session affinity & reset (in-SDK)**: the SDK keys kiro-cli sessions off opencode's
   `x-session-affinity` header, isolates tool-less utility calls (title generation) on
   an ephemeral session, detects prompt-history divergence (fork/`/undo`), and starts a
@@ -182,21 +208,6 @@ of scope for this plugin.
 - **Credits metadata**: the SDK attaches `{ kiro: { credits, creditsUnit } }` provider
   metadata to the final part of each turn; opencode persists it, and the TUI plugin
   sums it per assistant message (deduped across text/reasoning parts) for the sidebar.
-
-## Coexistence with the models.dev catalog
-
-The kiro catalog entry for [models.dev](https://models.dev) is **merged**
-([sst/models.dev#1312](https://github.com/sst/models.dev/pull/1312)). Once live
-catalogs ship it, stock opencode will know kiro's model metadata even without this
-plugin — but the plugin remains required for **auth** (the kiro-cli login method and
-the SDK options loader) and the **TUI credits box**.
-
-The two coexist by design: opencode merges config-level providers with the catalog
-database, and the plugin's seeding is idempotent-by-skip — if `provider.kiro` already
-exists in your config (your own entry, or a future opencode surfacing the catalog at
-config level), the seed steps aside entirely and never clobbers it. Defining your own
-`provider.kiro` in `opencode.json` is therefore also the override/removal path; a
-future plugin release may drop seeding once the catalog entry is ubiquitous.
 
 ## Troubleshooting
 
@@ -206,10 +217,10 @@ future plugin release may drop seeding once the catalog entry is ubiquitous.
 | Auth times out after ~120s | Complete the browser login faster, or run `kiro-cli login` yourself, then re-run `opencode auth login` (fast path). |
 | Two "Context" boxes in the sidebar | Add `"plugin_enabled": { "internal:sidebar-context": false }` to `tui.json` (see [Credits in the sidebar](#credits-in-the-sidebar)). |
 | No credits line / credits stay 0 | Credits appear after the first **completed** kiro turn; cancelled turns and turns without usage metadata contribute nothing. Check the TUI plugin is `active` in the Plugins dialog (and listed in `tui.json`). |
-| Kiro models missing from `opencode models` | Check `opencode-kiro` is in `opencode.json`'s `plugin` array. If you define `provider.kiro` yourself, your entry fully replaces the seeded one (by design) — including its model list. |
+| `kiro` provider not showing in `opencode models` | The provider comes from the models.dev catalog, not this plugin. Ensure your opencode version ships a catalog that includes `kiro` (run `opencode models --refresh` to update the cache). For local development, point opencode at a kiro-inclusive catalog via `OPENCODE_MODELS_PATH=/path/to/api.json` (see [Local development](#local-development-path-source)). |
 | `sdk.languageModel is not a function` | A stale `kiro-acp-ai-provider` < 2.0.0 resolved from opencode's package cache. Remove the cached copy (`$XDG_CACHE_HOME/opencode/packages/kiro-acp-ai-provider`, default `~/.cache/opencode/packages/...`) and retry — 2.0.0 fixed the factory auto-discovery clash. |
 | Path install rejected (`must export id`) | Run `npm run build` in your checkout first and reference the repo root (both entry modules export ids). |
-| Provider visible but runs fail | A seeded provider is selectable before auth exists. Run `opencode auth login` first. |
+| Provider visible but runs fail | The provider is selectable (from the catalog) before any credential exists. Run `opencode auth login` first. |
 
 ## Development
 
