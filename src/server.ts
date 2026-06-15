@@ -15,12 +15,24 @@ const server = async (input: PluginInput): Promise<Hooks> => ({
     provider: "kiro",
     // Returned options become the provider options resolveSDK passes to the
     // SDK factory: createKiroAcp({ name, cwd, agent, trustAllTools,
-    // mcpTimeout, apiKey, ... }). Mirrors the old core custom loader.
-    loader: async (_getAuth, _provider) => ({
+    // mcpTimeout, contextWindows, ... }). Mirrors the old core custom loader.
+    //
+    // `provider` is opencode's resolved catalog entry (typed `Provider` from
+    // `@opencode-ai/sdk` via AuthHook.loader). We relay each model's
+    // `limit.context` (sourced from models.dev) into the SDK's
+    // `contextWindows` map keyed by the model's `api.id`, so the SDK no longer
+    // needs a built-in per-model table. Models with no/zero context limit are
+    // skipped (the SDK falls back to 1M for any id absent from the map).
+    loader: async (_getAuth, provider) => ({
       cwd: input.directory ?? input.worktree,
       agent: "opencode",
       trustAllTools: true,
       mcpTimeout: 45,
+      contextWindows: Object.fromEntries(
+        Object.values(provider.models)
+          .filter((m) => (m.limit?.context ?? 0) > 0)
+          .map((m) => [m.api.id, m.limit.context]),
+      ),
     }),
     methods: [
       {

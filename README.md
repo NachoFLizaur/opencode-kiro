@@ -196,8 +196,11 @@ plugin.
 - **SDK resolution (resolveSDK)**: opencode reads the catalog's `npm` field
   (`kiro-acp-ai-provider`), installs that package into its package cache on first model
   use, and imports it. This plugin's `auth` loader supplies the provider options
-  (`cwd`, `agent`, `trustAllTools`, `mcpTimeout`) that opencode forwards into
-  `createKiroAcp(...)`.
+  (`cwd`, `agent`, `trustAllTools`, `mcpTimeout`, `contextWindows`) that opencode forwards
+  into `createKiroAcp(...)`. The loader relays each model's `limit.context` (from
+  models.dev, via opencode's resolved catalog) into the SDK's `contextWindows` map keyed
+  by `api.id` — so the SDK keeps no hardcoded per-model data and falls back to 1,000,000
+  for any model absent from the relay.
 - **Auth (this plugin)**: registers the "Kiro CLI Login" OAuth method (kiro-cli login
   flow) plus the options loader above. The same plugin also imports `verifyAuth` from
   `kiro-acp-ai-provider` to check kiro-cli installation/login state.

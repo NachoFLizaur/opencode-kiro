@@ -22,11 +22,26 @@ const makeInput = (input: { directory?: string; worktree?: string }): PluginInpu
 
 type LoaderFn = NonNullable<AuthHook["loader"]>
 
-/** The loader must ignore its args — calling getAuth would reject the test. */
+/** The loader must ignore its getAuth arg — calling it would reject the test. */
 const neverAuth: Parameters<LoaderFn>[0] = async () => {
   throw new Error("loader must not call getAuth")
 }
-const fakeProvider = {} as Parameters<LoaderFn>[1]
+
+/**
+ * Fake opencode catalog provider. The loader reads only `provider.models`,
+ * relaying each model's `limit.context` (from models.dev) into the SDK's
+ * `contextWindows` map keyed by `api.id`. Includes a zero-limit and a
+ * missing-limit model to prove they are filtered out of the relay.
+ */
+const fakeProvider = {
+  models: {
+    "claude-sonnet-4.5": { api: { id: "claude-sonnet-4.5" }, limit: { context: 200_000 } },
+    "claude-opus-4.6": { api: { id: "claude-opus-4.6" }, limit: { context: 1_000_000 } },
+    "deepseek-3.2": { api: { id: "deepseek-3.2" }, limit: { context: 164_000 } },
+    "zero-limit": { api: { id: "zero-limit" }, limit: { context: 0 } },
+    "missing-limit": { api: { id: "missing-limit" } },
+  },
+} as unknown as Parameters<LoaderFn>[1]
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..")
 
@@ -53,7 +68,7 @@ describe("server hooks", () => {
     expect(typeof method?.authorize).toBe("function")
   })
 
-  test("auth loader returns core-parity options", async () => {
+  test("auth loader returns core-parity options + relays catalog context windows", async () => {
     // Parity with old core custom loader (provider.ts:996-1001): these become
     // the provider options resolveSDK forwards into createKiroAcp({...}).
     const hooks = await serverPlugin.server(
@@ -62,13 +77,31 @@ describe("server hooks", () => {
 
     const options = await hooks.auth?.loader?.(neverAuth, fakeProvider)
 
+    // (a) the four core options, with directory winning over worktree, plus
+    // (b) the relayed contextWindows map keyed by api.id — zero/missing-limit
+    // models are filtered out.
     expect(options).toEqual({
       cwd: "/tmp/proj", // directory wins over worktree when both are set
       agent: "opencode",
       trustAllTools: true,
       mcpTimeout: 45,
+      contextWindows: {
+        "claude-sonnet-4.5": 200_000,
+        "claude-opus-4.6": 1_000_000,
+        "deepseek-3.2": 164_000,
+      },
     })
-    expect(Object.keys(options ?? {}).sort()).toEqual(["agent", "cwd", "mcpTimeout", "trustAllTools"])
+    expect(Object.keys(options ?? {}).sort()).toEqual([
+      "agent",
+      "contextWindows",
+      "cwd",
+      "mcpTimeout",
+      "trustAllTools",
+    ])
+    // Zero-limit and missing-limit models never reach the relay map.
+    const windows = (options as { contextWindows: Record<string, number> }).contextWindows
+    expect("zero-limit" in windows).toBe(false)
+    expect("missing-limit" in windows).toBe(false)
   })
 
   test("auth loader falls back to worktree", async () => {
