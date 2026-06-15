@@ -1,33 +1,15 @@
-// Pure credit-summing/formatting helpers for the Kiro sidebar context view.
+// Pure credit helpers for the sidebar context view (no opentui/solid imports,
+// so they unit-test under plain Node).
 //
-// The Kiro SDK (kiro-acp-ai-provider, task 05) emits `{ kiro: { credits,
-// creditsUnit } }` provider metadata on completed turns with known credits.
-// opencode persists it on parts, and the TUI plugin API exposes it as
-// `part.metadata` — NOT `providerMetadata` (SDK types.gen.ts TextPart:382-384,
-// ReasoningPart:408-410: `metadata?: { [key: string]: unknown }`).
-//
-// Dual-emission hazard: one assistant message carries the SAME turn total on
-// BOTH its final text part and its reasoning part (when the turn streamed
-// reasoning). Credits MUST therefore be counted ONCE PER MESSAGE — carriers
-// within a message are never summed; the last carrier wins.
-//
-// No `kiro` key at all (unknown credits, cancelled turns, mid-turn tool-call
-// flushes, error paths) means "no credits info": the message contributes
-// nothing and rendering degrades to a plain zero.
-//
-// This module is deliberately free of opentui/solid/plugin imports so task 09
-// can unit-test it under plain node/vitest without a TUI harness.
+// Credits come from part.metadata?.kiro ({ credits, creditsUnit }), NOT
+// providerMetadata. Dedupe rule: count once per message; a message's text and
+// reasoning parts carry the same turn total (dual emission), so the last
+// carrier wins and parts are never summed. No `kiro` key means no credits.
 
-/**
- * Any part-like object; credit metadata is read defensively from an optional
- * `metadata` record. Every SDK `Part` variant is assignable — including ones
- * with no `metadata` property at all (e.g. SubtaskPart), which simply
- * contribute nothing. (`object` rather than `{ metadata?: unknown }` because
- * TypeScript's weak-type check would reject metadata-less Part variants.)
- */
+/** Any part-like object. `object` (not `{ metadata?: unknown }`) so metadata-less SDK Part variants stay assignable. */
 export type CreditPart = object
 
-/** Minimal structural message shape — SDK `Message` is assignable. */
+/** Minimal message shape; SDK `Message` is assignable. */
 export interface CreditMessage {
   readonly id: string
   readonly role: string
@@ -49,12 +31,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null
 }
 
-/**
- * Read `{ kiro: { credits, creditsUnit } }` from one part's metadata.
- * Defensive on every level — metadata is untyped (`Record<string, unknown>`)
- * and only finite numeric credits count, mirroring the provider's own
- * `Number.isFinite` emission guard.
- */
+/** Read `{ kiro: { credits, creditsUnit } }` from a part; only finite numeric credits count. */
 export function readPartCredits(part: CreditPart): PartCredits | undefined {
   if (!isRecord(part)) return undefined
   const metadata = part.metadata
@@ -68,12 +45,7 @@ export function readPartCredits(part: CreditPart): PartCredits | undefined {
   }
 }
 
-/**
- * One message's turn total + unit, deduped across parts: text and reasoning
- * parts of the same message carry the SAME total (dual emission), so the LAST
- * carrier's credits win and carrier values are NEVER summed. The unit comes
- * from the most recent part carrying `creditsUnit`.
- */
+/** One message's credits, deduped by the last-carrier-wins rule (parts never summed); unit from the most recent carrier. */
 export function messageCredits(parts: ReadonlyArray<CreditPart>): PartCredits | undefined {
   const carriers = parts.map(readPartCredits).filter((value): value is PartCredits => value !== undefined)
   const last = carriers.at(-1)
@@ -84,20 +56,12 @@ export function messageCredits(parts: ReadonlyArray<CreditPart>): PartCredits | 
   }
 }
 
-/**
- * Per-message credit total (dedupe-per-message rule of `messageCredits`), or
- * undefined when no part carries credit metadata.
- */
+/** Per-message credit total, or undefined when no part carries credits. */
 export function creditsForMessage(parts: ReadonlyArray<CreditPart>): number | undefined {
   return messageCredits(parts)?.credits
 }
 
-/**
- * Sum turn totals across a session's ASSISTANT messages — exactly one value
- * per message. The unit is whatever the most recent carrier reported (message
- * order, then part order); the SDK metadata is its only source, never a
- * client-side constant. Empty/credit-free sessions yield `{ total: 0 }`.
- */
+/** Sum per-message totals across a session's assistant messages (one value each); unit from the most recent carrier. */
 export function sumSessionCredits(
   messages: ReadonlyArray<CreditMessage>,
   partsByMessage: (messageID: string) => ReadonlyArray<CreditPart>,
@@ -117,17 +81,10 @@ export function sumSessionCredits(
     )
 }
 
-// Explicit locale keeps helper output deterministic for unit tests; the
-// builtin context box pins "en-US" for its money formatter the same way.
+// Explicit locale keeps output deterministic for tests.
 const creditsAmount = new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 })
 
-/**
- * Render a credits value with the SDK-reported unit, e.g. `"12.5 credits"`,
- * `"1 credit"`, `"0 credits"`. The unit text comes from `creditsUnit`
- * verbatim (kiro-cli reports the singular "credit") and is naively pluralized
- * unless it already ends in "s". With no unit known yet (no metadata) only
- * the number renders — a unit string is never invented client-side.
- */
+/** Render credits with the unit, e.g. "12.5 credits", "1 credit". Unit is naively pluralized unless it ends in "s"; with no unit, only the number renders. */
 export function formatCredits(value: number, unit?: string): string {
   const amount = creditsAmount.format(Number.isFinite(value) ? value : 0)
   if (!unit) return amount

@@ -3,21 +3,21 @@
 The ACP-compliant [Kiro](https://kiro.dev) auth plugin for [opencode](https://opencode.ai).
 
 opencode learns the `kiro` provider and its 12 models from the
-[models.dev](https://models.dev) catalog — exactly like the first-party Copilot and
+[models.dev](https://models.dev) catalog, exactly like the first-party Copilot and
 GitLab integrations. This plugin supplies the piece the catalog can't: the **auth**.
 
-- **Auth** via the official `kiro-cli` login flow (`opencode auth login` → "Kiro CLI Login")
-- **Provider options loader** — the `cwd`, `agent`, `trustAllTools`, `mcpTimeout` values
+- **Auth** via the official `kiro-cli` login flow (`opencode auth login`, then "Kiro CLI Login")
+- **Provider options loader**: the `cwd`, `agent`, `trustAllTools`, `mcpTimeout` values
   opencode forwards into the SDK factory
-- **TUI credits display** — an opt-in sidebar context box showing tokens, context usage,
+- **TUI credits display**: an opt-in sidebar context box showing tokens, context usage,
   and Kiro credits
 
 The `kiro` provider resolves to [`kiro-acp-ai-provider`](https://www.npmjs.com/package/kiro-acp-ai-provider),
 an AI-SDK provider that talks to your locally installed `kiro-cli` over Kiro's
-[Agent Client Protocol](https://agentclientprotocol.com) (ACP) — opencode picks it up from
+[Agent Client Protocol](https://agentclientprotocol.com) (ACP); opencode picks it up from
 the catalog's `npm` field. This is the supported integration path: requests go through
-kiro-cli exactly like Kiro's own IDE clients — no credential scraping, no reuse of Kiro
-credentials against other providers.
+kiro-cli exactly like Kiro's own IDE clients, with no credential scraping and no reuse of
+Kiro credentials against other providers.
 
 Not affiliated with any other kiro-named npm packages.
 
@@ -39,20 +39,20 @@ opencode plugin opencode-kiro
 The installer reads this package's `exports` and detects both plugin entrypoints
 (`./server` and `./tui`), then patches **both** config files automatically:
 
-- `.opencode/opencode.json` — the server plugin (auth)
-- `.opencode/tui.json` — the TUI plugin (credits sidebar box)
+- `.opencode/opencode.json`: the server plugin (auth)
+- `.opencode/tui.json`: the TUI plugin (credits sidebar box)
 
 (with `--global`: `~/.config/opencode/opencode.json` and `~/.config/opencode/tui.json`)
 
-You do **not** add a `provider.kiro` block — opencode loads the `kiro` provider and its
-models straight from the models.dev catalog. Then disable the builtin context box — see
+You do **not** add a `provider.kiro` block; opencode loads the `kiro` provider and its
+models straight from the models.dev catalog. Then disable the builtin context box, see
 [Credits in the sidebar](#credits-in-the-sidebar).
 
 ### Manual alternative
 
 Add the package name to the `plugin` array of **both** files yourself (in the
 project's `.opencode/` directory, at the project root, or in the global
-`~/.config/opencode/` — all are valid config locations):
+`~/.config/opencode/`, all are valid config locations):
 
 `opencode.json`:
 
@@ -71,7 +71,7 @@ project's `.opencode/` directory, at the project root, or in the global
 }
 ```
 
-(`plugin_enabled` is the [credits sidebar](#credits-in-the-sidebar) step — recommended now, explained below.)
+(`plugin_enabled` is the [credits sidebar](#credits-in-the-sidebar) step, recommended now, explained below.)
 
 ### Local development (path source)
 
@@ -89,8 +89,8 @@ npm install && npm run build
 
 opencode resolves the right entrypoint per file from the package `exports`. Note that
 path-sourced TUI plugins **must export an `id`** (opencode rejects them otherwise);
-this package ships `{ id: "opencode-kiro", tui }`, so the id — and your
-`plugin_enabled` keys — are identical across path and npm installs.
+this package ships `{ id: "opencode-kiro", tui }`, so the id (and your
+`plugin_enabled` keys) are identical across path and npm installs.
 
 Because the provider now comes from the catalog rather than the plugin, a local checkout
 also needs a catalog that includes `kiro`. opencode reads its catalog from
@@ -112,13 +112,13 @@ opencode auth login
 
 Select the **Kiro (plugin)** provider, then the **Kiro CLI Login** method:
 
-- **Already logged in to kiro-cli**: immediate success — the existing kiro-cli session is reused.
+- **Already logged in to kiro-cli**: immediate success; the existing kiro-cli session is reused.
 - **Not logged in**: the plugin launches `kiro-cli login`, which opens a browser window.
   Complete the login there; the plugin polls for up to 120 seconds and stores the
   credential when kiro-cli reports success.
 
 If the flow times out, authenticate directly with kiro-cli (`kiro-cli login`) and run
-`opencode auth login` again — the fast path then completes immediately.
+`opencode auth login` again; the fast path then completes immediately.
 
 > **Note:** opencode will also surface `kiro` if the `KIRO_API_KEY` environment variable
 > is set, because the catalog entry declares `env: ["KIRO_API_KEY"]`. The intended auth
@@ -128,7 +128,7 @@ If the flow times out, authenticate directly with kiro-cli (`kiro-cli login`) an
 ## Models
 
 12 models, defined in the [models.dev](https://models.dev) `kiro` catalog entry. opencode
-loads them from there — the table below is a convenience snapshot, not the source of
+loads them from there; the table below is a convenience snapshot, not the source of
 truth. All models support tool calling and have a 64K-token output limit.
 
 | Model | ID | Context window | Image input |
@@ -169,19 +169,19 @@ Disable the builtin box in `tui.json` so only the replacement renders:
 }
 ```
 
-Without this you will see **two** context boxes (cosmetic duplication — the builtin
-one, plus the plugin's). The credits value and its unit come from provider metadata
+Without this you will see **two** context boxes (cosmetic duplication: the builtin
+one plus the plugin's). The credits value and its unit come from provider metadata
 emitted by the SDK (kiro-cli reports the unit); nothing is hardcoded client-side.
 
 Trade-off: the replacement box applies to **every** session and disabling the builtin
-is global — mixed-provider users lose the builtin `$X.XX spent` line for non-Kiro
+is global: mixed-provider users lose the builtin `$X.XX spent` line for non-Kiro
 sessions too; if you need dollar cost there, leave the builtin enabled at the cost of
 the duplicate box.
 
 ## Known limitation (read this)
 
-**Credits display is TUI-sidebar-only.** Every other cost surface — the prompt footer,
-ACP clients, the web app, desktop, web share pages, and CLI cost output — shows $0.00
+**Credits display is TUI-sidebar-only.** Every other cost surface (the prompt footer,
+ACP clients, the web app, desktop, web share pages, and CLI cost output) shows $0.00
 for Kiro sessions. The models.dev catalog declares Kiro's per-token `cost` as 0 (it is a
 subscription-metered provider with no per-token pricing), so opencode core computes $0.00
 everywhere it renders dollar cost. That is expected, not a defect. A cross-surface credits
@@ -192,14 +192,14 @@ plugin.
 
 - **Provider & models (models.dev)**: opencode loads the `kiro` provider and its full
   model list from the models.dev catalog. This plugin does **not** define any provider or
-  model config of its own — there is no `config` hook.
+  model config of its own; there is no `config` hook.
 - **SDK resolution (resolveSDK)**: opencode reads the catalog's `npm` field
   (`kiro-acp-ai-provider`), installs that package into its package cache on first model
   use, and imports it. This plugin's `auth` loader supplies the provider options
   (`cwd`, `agent`, `trustAllTools`, `mcpTimeout`, `contextWindows`) that opencode forwards
   into `createKiroAcp(...)`. The loader relays each model's `limit.context` (from
   models.dev, via opencode's resolved catalog) into the SDK's `contextWindows` map keyed
-  by `api.id` — so the SDK keeps no hardcoded per-model data and falls back to 1,000,000
+  by `api.id`, so the SDK keeps no hardcoded per-model data and falls back to 1,000,000
   for any model absent from the relay.
 - **Auth (this plugin)**: registers the "Kiro CLI Login" OAuth method (kiro-cli login
   flow) plus the options loader above. The same plugin also imports `verifyAuth` from
@@ -221,7 +221,7 @@ plugin.
 | Two "Context" boxes in the sidebar | Add `"plugin_enabled": { "internal:sidebar-context": false }` to `tui.json` (see [Credits in the sidebar](#credits-in-the-sidebar)). |
 | No credits line / credits stay 0 | Credits appear after the first **completed** kiro turn; cancelled turns and turns without usage metadata contribute nothing. Check the TUI plugin is `active` in the Plugins dialog (and listed in `tui.json`). |
 | `kiro` provider not showing in `opencode models` | The provider comes from the models.dev catalog, not this plugin. Ensure your opencode version ships a catalog that includes `kiro` (run `opencode models --refresh` to update the cache). For local development, point opencode at a kiro-inclusive catalog via `OPENCODE_MODELS_PATH=/path/to/api.json` (see [Local development](#local-development-path-source)). |
-| `sdk.languageModel is not a function` | A stale `kiro-acp-ai-provider` < 2.0.0 resolved from opencode's package cache. Remove the cached copy (`$XDG_CACHE_HOME/opencode/packages/kiro-acp-ai-provider`, default `~/.cache/opencode/packages/...`) and retry — 2.0.0 fixed the factory auto-discovery clash. |
+| `sdk.languageModel is not a function` | A stale `kiro-acp-ai-provider` < 2.0.0 resolved from opencode's package cache. Remove the cached copy (`$XDG_CACHE_HOME/opencode/packages/kiro-acp-ai-provider`, default `~/.cache/opencode/packages/...`) and retry; 2.0.0 fixed the factory auto-discovery clash. |
 | Path install rejected (`must export id`) | Run `npm run build` in your checkout first and reference the repo root (both entry modules export ids). |
 | Provider visible but runs fail | The provider is selectable (from the catalog) before any credential exists. Run `opencode auth login` first. |
 
@@ -230,7 +230,7 @@ plugin.
 ```bash
 npm install
 npm run typecheck   # tsc --noEmit
-npm run build       # tsup → dist/server.js + dist/tui.js (+ d.ts)
+npm run build       # tsup builds dist/server.js + dist/tui.js (+ d.ts)
 npm test            # vitest
 ```
 

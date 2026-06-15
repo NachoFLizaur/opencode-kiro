@@ -4,12 +4,9 @@ import { dirname, join } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { describe, expect, test } from "vitest"
 
-// Scaffold smoke tests (task 03): exercise the BUILT package contract — run
-// `npm run build` before this file. Covered contracts: exports resolution,
-// plugin-discoverable metadata, emitted artifacts, the loader's module-kind
-// isolation rule (opencode shared.ts:272-304), and host-package
-// externalization. Assertions target SHAPE, not stub content, so this file
-// remains the regression net once tasks 07/08 replace the stubs.
+// Built-package smoke tests: run `npm run build` first. Covers exports
+// resolution, discoverable metadata, emitted artifacts, the loader's
+// module-kind isolation rule, and host-package externalization.
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..")
 
@@ -30,18 +27,13 @@ interface PackageJson {
 const readPkg = async (): Promise<PackageJson> =>
   JSON.parse(await readFile(join(ROOT, "package.json"), "utf8")) as PackageJson
 
-/**
- * Import a built module via a runtime-computed file URL so `tsc --noEmit`
- * never tries to resolve `dist/` (which is gitignored and absent pre-build).
- */
+/** Import a built module via a runtime URL so tsc never resolves dist/. */
 const importDist = (name: string): Promise<{ default: Record<string, unknown> }> =>
   import(pathToFileURL(distPath(name)).href) as Promise<{ default: Record<string, unknown> }>
 
 /**
- * Blank out every module specifier in import / export-from / require
- * position. Residual text then reveals package names appearing anywhere
- * EXCEPT as a specifier — e.g. esbuild's inlined-source path comments, which
- * is what bundling an external would produce.
+ * Blank out every module specifier (import / export-from / require) so residual
+ * package names reveal a bundled external, e.g. an esbuild inlined-source path.
  */
 const withoutImportSpecifiers = (code: string): string =>
   code.replace(
@@ -80,8 +72,8 @@ describe("scaffold package contract", () => {
 
     expect(typeof mod.default.server).toBe("function")
     expect(mod.default.id).toBe("kiro")
-    // Loader rejects modules exporting both kinds (shared.ts:293-295): the
-    // `tui` key must be entirely absent, not merely undefined.
+    // Loader rejects modules exporting both kinds: `tui` must be absent, not
+    // merely undefined.
     expect("tui" in mod.default).toBe(false)
     expect(mod.default.tui).toBeUndefined()
   })
@@ -89,8 +81,7 @@ describe("scaffold package contract", () => {
   test("tui module shape: has tui, never server", async () => {
     const mod = await importDist("tui.js")
 
-    // Loader rejects non-function `tui` exports (shared.ts:290-292), so the
-    // shape contract is specifically a FUNCTION-valued `tui`.
+    // Loader rejects non-function `tui`, so it must be function-valued.
     expect(typeof mod.default.tui).toBe("function")
     expect("server" in mod.default).toBe(false)
     expect(mod.default.server).toBeUndefined()
@@ -103,11 +94,8 @@ describe("scaffold package contract", () => {
       const code = await readFile(distPath(file), "utf8")
       const residue = withoutImportSpecifiers(code)
 
-      // Externals may appear ONLY as import specifiers (the SDK is reached via
-      // a dynamic `import("kiro-acp-ai-provider")` for verifyAuth) — any
-      // residual mention (e.g. an esbuild inlined-source path comment like
-      // `// ../kiro-acp-ai-provider/dist/index.js`) means the host/SDK package
-      // was bundled instead of left external.
+      // Externals may appear only as import specifiers; any residual mention
+      // means the host/SDK package was bundled instead of left external.
       expect(residue).not.toContain("kiro-acp-ai-provider")
       expect(residue).not.toContain("@opencode-ai/plugin")
     }

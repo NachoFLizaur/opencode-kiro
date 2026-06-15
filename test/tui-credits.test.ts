@@ -11,15 +11,10 @@ import {
   type CreditPart,
 } from "../src/tui/credits"
 
-// TUI credit-helper tests (task 09, for task 08). The helpers are pure by
-// design — no opentui runtime, no plugin host, no mocks: fixtures are plain
-// Part-shaped objects carrying `metadata` (SDK types.gen.ts TextPart:382-384,
-// ReasoningPart:408-410 — the plugin API surfaces `metadata`, never
-// `providerMetadata`).
-//
-// Core hazard under test: DUAL EMISSION — one assistant message carries the
-// SAME turn total on both its final text part and its reasoning part, so
-// credits must count ONCE PER MESSAGE (last carrier wins, never summed).
+// Credit-helper tests. Fixtures are plain Part-shaped objects carrying
+// `metadata` (the plugin API surfaces metadata, never providerMetadata).
+// Core hazard is dual emission: one message carries the same total on its text
+// and reasoning parts, so credits count once per message (last carrier wins).
 
 /** Part-shaped fixture carrying `{ kiro: ... }` metadata. */
 const carrierPart = (type: "text" | "reasoning", kiro: Record<string, unknown>): CreditPart => ({
@@ -45,13 +40,12 @@ describe("credit dedupe per message", () => {
 
     const credits = creditsForMessage(parts)
 
-    expect(credits).toBe(3) // NOT 6 — carriers are never summed within a message
+    expect(credits).toBe(3) // not 6: carriers are never summed within a message
   })
 
   test("last carrier wins within a message; unit backfills from part order", () => {
-    // Differing carrier values prove the rule is last-wins, not max/sum: the
-    // unit-less final carrier takes the credits while the unit falls back to
-    // the most recent part that DID carry creditsUnit.
+    // Differing values prove last-wins (not max/sum): the unit-less final
+    // carrier takes the credits, unit falls back to the last part that had one.
     const parts = [
       carrierPart("reasoning", { credits: 2, creditsUnit: "credit" }),
       carrierPart("text", { credits: 5 }),
@@ -88,9 +82,8 @@ describe("sumSessionCredits", () => {
   })
 
   test("messages without metadata contribute 0", () => {
-    // Mixed session: empty messages, metadata-less parts, malformed metadata,
-    // and non-finite credits all contribute nothing — only the real carrier
-    // counts and the total stays a finite number (no NaN propagation).
+    // Mixed session: empty, metadata-less, malformed, and non-finite credits
+    // all contribute nothing; only the real carrier counts (no NaN).
     const messages = [assistant("msg_1"), assistant("msg_2"), assistant("msg_3"), assistant("msg_4")]
     const partsByMessage = lookup({
       msg_1: [],
@@ -116,9 +109,7 @@ describe("sumSessionCredits", () => {
   })
 
   test("non-kiro metadata ignored", () => {
-    // Key scoping: only `metadata.kiro` counts — other metadata namespaces
-    // and the raw `providerMetadata` key (not surfaced by the plugin API)
-    // contribute nothing.
+    // Only metadata.kiro counts; other namespaces and providerMetadata don't.
     const otherNamespace: CreditPart = { type: "text", metadata: { other: { credits: 9, creditsUnit: "credit" } } }
     const wrongKey: CreditPart = { type: "text", providerMetadata: { kiro: { credits: 9 } } }
 
@@ -146,8 +137,8 @@ describe("sumSessionCredits", () => {
 
 describe("formatCredits", () => {
   test("formatCredits edge cases", () => {
-    // kiro-cli reports the singular "credit"; pluralize only when the value
-    // is not exactly 1 and the unit is not already s-terminated.
+    // kiro-cli reports singular "credit"; pluralize unless value is 1 or the
+    // unit already ends in "s".
     expect(formatCredits(0, "credit")).toBe("0 credits")
     expect(formatCredits(0.5, "credit")).toBe("0.5 credits")
     expect(formatCredits(12, "credit")).toBe("12 credits")
@@ -155,7 +146,7 @@ describe("formatCredits", () => {
     expect(formatCredits(1, "credit")).toBe("1 credit") // singular preserved
     expect(formatCredits(2, "points")).toBe("2 points") // never "pointss"
 
-    // No unit known yet → bare number; a unit string is never invented.
+    // No unit known: bare number, never an invented unit string.
     expect(formatCredits(0)).toBe("0")
     expect(formatCredits(0.5)).toBe("0.5")
     expect(formatCredits(12)).toBe("12")
@@ -169,21 +160,17 @@ describe("dist/tui.js module isolation", () => {
   const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..")
 
   /**
-   * Import the built module via a runtime-computed file URL so `tsc --noEmit`
-   * never tries to resolve `dist/` (gitignored, absent pre-build). The import
-   * SUCCEEDING under plain node is itself the lazy-@opentui/core contract —
-   * the Bun-native TUI runtime only loads inside `tui()`.
+   * Import the built module via a runtime URL so tsc never resolves dist/. The
+   * import succeeding under plain Node is the lazy-@opentui/core contract: the
+   * Bun-native TUI runtime only loads inside tui().
    */
   const importDist = (name: string): Promise<Record<string, unknown>> =>
     import(pathToFileURL(join(ROOT, "dist", name)).href) as Promise<Record<string, unknown>>
 
   test("tui module exports no server", async () => {
-    // Namespace-level isolation (scaffold.test.ts already covers the DEFAULT
-    // export's function-valued `tui` / absent `server`): the default carries
-    // ONLY `id` + `tui` (id is REQUIRED for path/file installs — opencode's
-    // resolvePluginId rejects file-source plugins without one), no `server`
-    // named export exists anywhere, and the pure helpers stay importable as
-    // named exports.
+    // Default carries only id + tui (id is required for path/file installs:
+    // opencode rejects file-source plugins without one); no `server` export
+    // anywhere, and the pure helpers stay importable as named exports.
     const mod = await importDist("tui.js")
 
     expect("server" in mod).toBe(false)

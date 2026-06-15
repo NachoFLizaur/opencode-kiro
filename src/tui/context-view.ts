@@ -1,28 +1,11 @@
-// Full-replacement sidebar context box: tokens + context percent (mirroring
-// the builtin `internal:sidebar-context` derivation exactly) + a Kiro credits
-// line summed from persisted part metadata.
+// Full replacement for the builtin `internal:sidebar-context` box: tokens,
+// context percent (mirroring the builtin derivation), and a Kiro credits line
+// in place of the builtin "$X spent" (Kiro is subscription-metered, so dollar
+// cost is always $0.00).
 //
-// Authored programmatically against @opentui/solid's universal-renderer
-// exports (createElement/insert/insertNode/setProp/effect) — precisely the
-// calls compiled Solid JSX lowers to — so the published dist needs no
-// babel/solid transform at build or load time. The bare `@opentui/solid` and
-// `solid-js` imports stay external (tsup config) and are aliased to the TUI
-// HOST's own module instances at load time by opencode's runtime plugin
-// support, keeping reactivity on the host's reactive system.
-//
-// Builtin layout being mirrored (packages/tui/src/feature-plugins/sidebar/
-// context.tsx):
-//
-//   <box>
-//     <text fg={theme.text}><b>Context</b></text>
-//     <text fg={theme.textMuted}>{tokens.toLocaleString()} tokens</text>
-//     <text fg={theme.textMuted}>{percent ?? 0}% used</text>
-//     <text fg={theme.textMuted}>{money.format(cost)} spent</text>
-//   </box>
-//
-// The "$X spent" line is replaced by the credits line: Kiro is
-// subscription-metered, so dollar cost is always $0.00 there — credits are
-// the meaningful spend signal (user requirement #6's TUI-sidebar stopgap).
+// Built with @opentui/solid's universal-renderer calls (what compiled Solid JSX
+// lowers to) so the dist needs no solid transform. @opentui/solid and solid-js
+// stay external and are aliased to the host's instances at load time.
 import type { TuiPluginApi } from "@opencode-ai/plugin/tui"
 import type { AssistantMessage } from "@opencode-ai/sdk/v2"
 import { createElement, effect, insert, insertNode, setProp, type DomNode } from "@opentui/solid"
@@ -31,18 +14,13 @@ import { formatCredits, sumSessionCredits } from "./credits.js"
 
 type ThemeAccessor = () => TuiPluginApi["theme"]["current"]
 
-/**
- * Build the replacement context box for one session. Returned renderable is
- * a valid `sidebar_content` slot element (JSX.Element = DomNode for the
- * universal renderer).
- */
+/** Build the replacement context box for one session. */
 export function createContextView(api: TuiPluginApi, sessionID: string): DomNode {
   const theme: ThemeAccessor = () => api.theme.current
   const messages = createMemo(() => api.state.session.messages(sessionID))
 
-  // Token/percent derivation mirrors the builtin: latest assistant message
-  // with output tokens; percent against that model's context limit, resolved
-  // through api.state.provider.
+  // Mirrors the builtin: latest assistant message with output tokens; percent
+  // against that model's context limit.
   const usage = createMemo(() => {
     const last = messages().findLast(
       (item): item is AssistantMessage => item.role === "assistant" && item.tokens.output > 0,
@@ -63,8 +41,8 @@ export function createContextView(api: TuiPluginApi, sessionID: string): DomNode
     }
   })
 
-  // Credits roll up across the CURRENT session's assistant messages only,
-  // deduped per message by the pure helpers (`part.metadata?.kiro?.credits`).
+  // Credits roll up across this session's assistant messages, deduped per
+  // message (from part.metadata?.kiro).
   const credits = createMemo(() => sumSessionCredits(messages(), (messageID) => api.state.part(messageID)))
 
   const root = createElement("box")

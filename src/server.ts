@@ -1,28 +1,14 @@
 import type { Hooks, PluginInput } from "@opencode-ai/plugin"
 
-// V1 server plugin module (opencode shared.ts readV1Plugin). This module must
-// NEVER export a `tui` key — the loader rejects modules exporting both kinds.
-//
-// AUTH-ONLY: the Kiro provider/model catalog is published to models.dev
-// (provider id `kiro`, `npm: "kiro-acp-ai-provider"`), so opencode loads the
-// full model list from the catalog. This plugin therefore only supplies the
-// `auth` hook (kiro-cli login flow + a `loader` that returns the provider
-// OPTIONS resolveSDK forwards into `createKiroAcp({...})`). No `config`
-// seeding and no `provider.models` hook — both would be redundant with the
-// catalog and a maintenance burden.
+// Auth-only server plugin: the kiro provider/model catalog lives on models.dev,
+// so this only supplies the `auth` hook. Must never export `tui` (the loader
+// rejects modules exporting both kinds).
 const server = async (input: PluginInput): Promise<Hooks> => ({
   auth: {
     provider: "kiro",
-    // Returned options become the provider options resolveSDK passes to the
-    // SDK factory: createKiroAcp({ name, cwd, agent, trustAllTools,
-    // mcpTimeout, contextWindows, ... }). Mirrors the old core custom loader.
-    //
-    // `provider` is opencode's resolved catalog entry (typed `Provider` from
-    // `@opencode-ai/sdk` via AuthHook.loader). We relay each model's
-    // `limit.context` (sourced from models.dev) into the SDK's
-    // `contextWindows` map keyed by the model's `api.id`, so the SDK no longer
-    // needs a built-in per-model table. Models with no/zero context limit are
-    // skipped (the SDK falls back to 1M for any id absent from the map).
+    // Returned options are forwarded into createKiroAcp({...}). Relays each
+    // catalog model's limit.context into contextWindows keyed by api.id;
+    // zero/missing limits are skipped (SDK falls back to 1M).
     loader: async (_getAuth, provider) => ({
       cwd: input.directory ?? input.worktree,
       agent: "opencode",
@@ -47,7 +33,7 @@ const server = async (input: PluginInput): Promise<Hooks> => ({
               "kiro-cli is not installed. Install it from https://kiro.dev/docs/cli/",
             )
 
-          // Already authenticated — return immediately
+          // Already authed: return immediately
           if (status.authenticated) {
             return {
               url: "",
@@ -59,7 +45,7 @@ const server = async (input: PluginInput): Promise<Hooks> => ({
             }
           }
 
-          // Not authenticated — launch kiro-cli auth login and poll
+          // Not authed: launch kiro-cli login and poll
           const { execFile } = await import("node:child_process")
           const child = execFile("kiro-cli", ["login"])
 
@@ -69,7 +55,7 @@ const server = async (input: PluginInput): Promise<Hooks> => ({
               "Complete Kiro authentication in the browser window that just opened. Waiting for login...",
             method: "auto" as const,
             async callback() {
-              // Poll until authenticated (kiro-cli auth login runs in background)
+              // Poll until authed (login runs in the background)
               const maxWait = 120_000
               const start = Date.now()
               while (Date.now() - start < maxWait) {

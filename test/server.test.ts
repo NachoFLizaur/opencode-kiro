@@ -4,35 +4,21 @@ import type { AuthHook, PluginInput } from "@opencode-ai/plugin"
 import { describe, expect, test } from "vitest"
 import serverPlugin from "../src/server"
 
-// Server module tests: the auth hook's synchronous contract. This plugin is
-// AUTH-ONLY — the provider/model catalog comes from models.dev, so there is
-// no `config` seeding and no `provider` hook to test here.
-//
-// The `authorize()` browser/poll flow is deliberately NOT unit-tested — it
-// spawns kiro-cli and is covered live. Here we only assert the method SHAPE
-// (type/label/authorize presence) and the `loader` return value. No opencode
-// host, no kiro-cli, no network.
+// Auth hook contract tests. The authorize() browser/poll flow isn't unit-tested
+// (it spawns kiro-cli); we assert only the method shape and the loader return.
 
-/**
- * Minimal fake PluginInput: plain object, no opencode runtime. The server
- * module only reads `directory` and `worktree`.
- */
+/** Fake PluginInput; the server module only reads directory and worktree. */
 const makeInput = (input: { directory?: string; worktree?: string }): PluginInput =>
   input as unknown as PluginInput
 
 type LoaderFn = NonNullable<AuthHook["loader"]>
 
-/** The loader must ignore its getAuth arg — calling it would reject the test. */
+/** The loader must ignore its getAuth arg. */
 const neverAuth: Parameters<LoaderFn>[0] = async () => {
   throw new Error("loader must not call getAuth")
 }
 
-/**
- * Fake opencode catalog provider. The loader reads only `provider.models`,
- * relaying each model's `limit.context` (from models.dev) into the SDK's
- * `contextWindows` map keyed by `api.id`. Includes a zero-limit and a
- * missing-limit model to prove they are filtered out of the relay.
- */
+/** Fake catalog provider; includes zero-limit and missing-limit models to prove they're filtered from the relay. */
 const fakeProvider = {
   models: {
     "claude-sonnet-4.5": { api: { id: "claude-sonnet-4.5" }, limit: { context: 200_000 } },
@@ -45,10 +31,7 @@ const fakeProvider = {
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..")
 
-/**
- * Import a built module via a runtime-computed file URL so `tsc --noEmit`
- * never tries to resolve `dist/` (gitignored, absent pre-build).
- */
+/** Import a built module via a runtime URL so tsc never resolves dist/. */
 const importDist = (name: string): Promise<Record<string, unknown>> =>
   import(pathToFileURL(join(ROOT, "dist", name)).href) as Promise<Record<string, unknown>>
 
@@ -56,8 +39,7 @@ describe("server hooks", () => {
   test("auth hook contract", async () => {
     const hooks = await serverPlugin.server(makeInput({ directory: "/tmp/proj", worktree: "/tmp/wt" }))
 
-    // AUTH-ONLY: exactly `auth` — no `config` seeding (the catalog comes from
-    // models.dev) and no `provider` hook.
+    // Auth-only: exactly `auth`, no config or provider hook.
     expect(Object.keys(hooks).sort()).toEqual(["auth"])
     expect(hooks.auth?.provider).toBe("kiro")
     expect(hooks.auth?.methods).toHaveLength(1)
@@ -69,19 +51,17 @@ describe("server hooks", () => {
   })
 
   test("auth loader returns core-parity options + relays catalog context windows", async () => {
-    // Parity with old core custom loader (provider.ts:996-1001): these become
-    // the provider options resolveSDK forwards into createKiroAcp({...}).
+    // These become the options forwarded into createKiroAcp({...}).
     const hooks = await serverPlugin.server(
       makeInput({ directory: "/tmp/proj", worktree: "/tmp/elsewhere" }),
     )
 
     const options = await hooks.auth?.loader?.(neverAuth, fakeProvider)
 
-    // (a) the four core options, with directory winning over worktree, plus
-    // (b) the relayed contextWindows map keyed by api.id — zero/missing-limit
-    // models are filtered out.
+    // Four core options (directory wins over worktree) plus the relayed
+    // contextWindows keyed by api.id (zero/missing-limit filtered out).
     expect(options).toEqual({
-      cwd: "/tmp/proj", // directory wins over worktree when both are set
+      cwd: "/tmp/proj",
       agent: "opencode",
       trustAllTools: true,
       mcpTimeout: 45,
