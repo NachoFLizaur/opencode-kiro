@@ -1,26 +1,16 @@
 import type { Hooks, PluginInput } from "@opencode-ai/plugin"
-import { seedProviderConfig } from "./server/seed"
-
-export { buildKiroModels, type KiroModelConfigMap } from "./server/models"
-export { seedProviderConfig } from "./server/seed"
 
 // V1 server plugin module (opencode shared.ts readV1Plugin). This module must
 // NEVER export a `tui` key — the loader rejects modules exporting both kinds.
 //
-// Hooks:
-// - `config`: idempotent seeding of `cfg.provider.kiro` (12 static models).
-// - `auth`: kiro-cli login flow, ported verbatim from opencode
-//   `packages/opencode/src/plugin/kiro-acp.ts`, plus a `loader` that supplies
-//   the provider OPTIONS forwarded by resolveSDK into `createKiroAcp({...})`.
-//
-// Deliberately NO `provider.models` hook: that hook's gate
-// (provider.ts `if (!provider) continue`) runs BEFORE config-seeded providers
-// extend the provider DB, so it would no-op for this provider. The config
-// seed therefore carries the FULL model list.
+// AUTH-ONLY: the Kiro provider/model catalog is published to models.dev
+// (provider id `kiro`, `npm: "kiro-acp-ai-provider"`), so opencode loads the
+// full model list from the catalog. This plugin therefore only supplies the
+// `auth` hook (kiro-cli login flow + a `loader` that returns the provider
+// OPTIONS resolveSDK forwards into `createKiroAcp({...})`). No `config`
+// seeding and no `provider.models` hook — both would be redundant with the
+// catalog and a maintenance burden.
 const server = async (input: PluginInput): Promise<Hooks> => ({
-  config: async (cfg) => {
-    seedProviderConfig(cfg)
-  },
   auth: {
     provider: "kiro",
     // Returned options become the provider options resolveSDK passes to the
