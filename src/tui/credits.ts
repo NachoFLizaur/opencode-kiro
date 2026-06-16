@@ -99,3 +99,30 @@ export function formatCredits(value: number, unit?: string): string {
   const label = value === 1 || unit.endsWith("s") ? unit : `${unit}s`
   return `${amount} ${label}`
 }
+
+// Mirrors the builtin sidebar's currency formatter (context.tsx): USD style.
+// Co-located here (not in context-view) so the cost lines are a pure, Solid-free
+// function that unit-tests under plain Node.
+const money = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" })
+
+/**
+ * The sidebar's muted cost lines, returned as an ARRAY (one entry per rendered
+ * muted row). Three display states:
+ *   - BOTH (credits present AND a non-zero dollar cost): TWO stacked lines
+ *     ["$X.XX spent", "N credits"]
+ *   - credits only (credits present, dollar cost 0): ["N credits"] (Kiro-only)
+ *   - dollars only (no credits): ["$X.XX spent"] (also ["$0.00 spent"] when empty)
+ * The matrix keys off `credits.present` (a real 0-credit Kiro turn is present)
+ * and `cost > 0`, never off `credits.total` alone.
+ */
+export function spendLines(input: { cost: number; credits: SessionCredits }): string[] {
+  const { cost, credits } = input
+  const dollars = money.format(Number.isFinite(cost) ? cost : 0)
+  if (credits.present && cost > 0) {
+    return [`${dollars} spent`, formatCredits(credits.total, credits.unit)]
+  }
+  if (credits.present) {
+    return [formatCredits(credits.total, credits.unit)]
+  }
+  return [`${dollars} spent`]
+}

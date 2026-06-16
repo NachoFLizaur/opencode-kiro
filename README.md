@@ -157,9 +157,17 @@ image-capable models receive it as an attachment.
 ## Credits in the sidebar
 
 Kiro is subscription-metered: requests consume **credits**, and the dollar cost
-opencode normally displays is always $0.00. The plugin therefore registers a
-**full replacement** for the built-in sidebar context box, showing tokens, context
-percentage, and session credits.
+opencode normally displays for Kiro turns is always $0.00. The plugin therefore
+registers a **full replacement** for the built-in sidebar context box, showing
+tokens, context percentage, and a spend line.
+
+The spend line adapts to what the session actually used:
+
+- **Dollars only** (no Kiro turns): the builtin's exact `$X.XX spent` line, so
+  non-Kiro sessions look identical to the built-in box.
+- **Credits only** (Kiro turns, no dollar cost): a single `N credits` line.
+- **Both** (the session used a dollar-based model AND Kiro in one session): two
+  stacked lines, `$X.XX spent` then `N credits`, so neither figure is hidden.
 
 Disable the builtin box in `tui.json` so only the replacement renders:
 
@@ -174,19 +182,21 @@ one plus the plugin's). The credits value and its unit come from provider metada
 emitted by the SDK (kiro-cli reports the unit); nothing is hardcoded client-side.
 
 Trade-off: the replacement box applies to **every** session and disabling the builtin
-is global: mixed-provider users lose the builtin `$X.XX spent` line for non-Kiro
-sessions too; if you need dollar cost there, leave the builtin enabled at the cost of
-the duplicate box.
+is global. The replacement reproduces the builtin `$X.XX spent` line for non-Kiro
+sessions (and stacks it above credits when a session used both), so mixed-provider
+users keep dollar cost in the sidebar; if you prefer the original built-in box, leave
+it enabled at the cost of the duplicate box.
 
 ## Known limitation (read this)
 
-**Credits display is TUI-sidebar-only.** Every other cost surface (the prompt footer,
-ACP clients, the web app, desktop, web share pages, and CLI cost output) shows $0.00
-for Kiro sessions. The models.dev catalog declares Kiro's per-token `cost` as 0 (it is a
-subscription-metered provider with no per-token pricing), so opencode core computes $0.00
-everywhere it renders dollar cost. That is expected, not a defect. A cross-surface credits
-display would require opencode core changes and is intentionally out of scope for this
-plugin.
+**Credits render in the TUI only.** Two TUI surfaces show them: the sidebar context
+box (above) and the input/prompt meta row chip (`session_prompt_right`), which sits
+beside the host's `$` cost chip. Every other cost surface (ACP clients, the web app,
+desktop, web share pages, and CLI cost output) shows $0.00 for Kiro sessions. The
+models.dev catalog declares Kiro's per-token `cost` as 0 (it is a subscription-metered
+provider with no per-token pricing), so opencode core computes $0.00 everywhere it
+renders dollar cost. That is expected, not a defect. A cross-surface credits display
+would require opencode core changes and is intentionally out of scope for this plugin.
 
 ## How it works
 

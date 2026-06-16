@@ -13,10 +13,7 @@ import type { TuiPluginApi } from "@opencode-ai/plugin/tui"
 import type { AssistantMessage } from "@opencode-ai/sdk/v2"
 import { createElement, effect, insert, insertNode, setProp, type DomNode } from "@opentui/solid"
 import { createMemo } from "solid-js"
-import { formatCredits, sumSessionCredits } from "./credits.js"
-
-// Mirrors the builtin's formatter exactly (context.tsx): style currency, USD.
-const money = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" })
+import { spendLines, sumSessionCredits } from "./credits.js"
 
 type ThemeAccessor = () => TuiPluginApi["theme"]["current"]
 
@@ -66,12 +63,15 @@ export function createContextView(api: TuiPluginApi, sessionID: string): DomNode
     root,
     mutedLine(theme, () => `${usage().percent ?? 0}% used`),
   )
-  // Kiro credits when present; otherwise the builtin's exact "$X spent" line.
-  insertNode(
+  // Kiro credits and/or the builtin "$X spent" line: dollars only, credits only,
+  // or BOTH (two stacked lines "$X.XX spent" then "N credits") when a session used
+  // both in one session. One mutedLine per returned array element; deriving the
+  // lines in a memo keeps each row reactive as cost()/credits() change while the
+  // row COUNT stays dynamic (1 or 2).
+  const costLines = createMemo(() => spendLines({ cost: cost(), credits: credits() }))
+  insert(
     root,
-    mutedLine(theme, () =>
-      credits().present ? formatCredits(credits().total, credits().unit) : `${money.format(cost())} spent`,
-    ),
+    () => costLines().map((line) => mutedLine(theme, () => line)),
   )
   return root
 }

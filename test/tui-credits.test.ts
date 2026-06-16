@@ -6,9 +6,11 @@ import {
   formatCredits,
   messageCredits,
   readPartCredits,
+  spendLines,
   sumSessionCredits,
   type CreditMessage,
   type CreditPart,
+  type SessionCredits,
 } from "../src/tui/credits"
 
 // Credit-helper tests. Fixtures are plain Part-shaped objects carrying
@@ -169,6 +171,62 @@ describe("formatCredits", () => {
   })
 })
 
+describe("spendLines", () => {
+  /** SessionCredits fixture; defaults to the no-kiro-metadata (dollars-only) shape. */
+  const sc = (over: Partial<SessionCredits> = {}): SessionCredits => ({
+    total: 0,
+    unit: undefined,
+    present: false,
+    ...over,
+  })
+
+  test("dollars only: cost>0 with no credits => one '$X.XX spent' line", () => {
+    expect(spendLines({ cost: 5, credits: sc() })).toEqual(["$5.00 spent"])
+  })
+
+  test("Kiro only: credits present with cost 0 => one credits line", () => {
+    expect(spendLines({ cost: 0, credits: sc({ total: 100, unit: "credit", present: true }) })).toEqual([
+      "100 credits",
+    ])
+  })
+
+  test("BOTH: cost>0 AND credits present => two stacked lines (dollars then credits)", () => {
+    expect(spendLines({ cost: 5, credits: sc({ total: 100, unit: "credit", present: true }) })).toEqual([
+      "$5.00 spent",
+      "100 credits",
+    ])
+  })
+
+  test("empty: cost 0 with no credits => '$0.00 spent'", () => {
+    expect(spendLines({ cost: 0, credits: sc() })).toEqual(["$0.00 spent"])
+  })
+
+  test("BOTH singular: pluralization reuses formatCredits (total 1 => '1 credit')", () => {
+    expect(spendLines({ cost: 5, credits: sc({ total: 1, unit: "credit", present: true }) })).toEqual([
+      "$5.00 spent",
+      "1 credit",
+    ])
+  })
+
+  test("BOTH unit-less: bare number on the credits line", () => {
+    expect(spendLines({ cost: 5, credits: sc({ total: 12, unit: undefined, present: true }) })).toEqual([
+      "$5.00 spent",
+      "12",
+    ])
+  })
+
+  test("zero-credit-but-present Kiro turn WITH cost>0 stays in the BOTH branch", () => {
+    expect(spendLines({ cost: 5, credits: sc({ total: 0, unit: "credit", present: true }) })).toEqual([
+      "$5.00 spent",
+      "0 credits",
+    ])
+  })
+
+  test("zero-credit-but-present Kiro turn with cost 0 stays in the credits-only branch", () => {
+    expect(spendLines({ cost: 0, credits: sc({ total: 0, unit: "credit", present: true }) })).toEqual(["0 credits"])
+  })
+})
+
 describe("dist/tui.js module isolation", () => {
   const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..")
 
@@ -189,7 +247,14 @@ describe("dist/tui.js module isolation", () => {
     expect("server" in mod).toBe(false)
     expect(Object.keys(mod.default as Record<string, unknown>)).toEqual(["id", "tui"])
     expect((mod.default as Record<string, unknown>).id).toBe("opencode-kiro")
-    const helpers = ["creditsForMessage", "formatCredits", "messageCredits", "readPartCredits", "sumSessionCredits"]
+    const helpers = [
+      "creditsForMessage",
+      "formatCredits",
+      "messageCredits",
+      "readPartCredits",
+      "spendLines",
+      "sumSessionCredits",
+    ]
     for (const helper of helpers) {
       expect(typeof mod[helper]).toBe("function")
     }

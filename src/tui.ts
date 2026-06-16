@@ -36,6 +36,7 @@ export {
   formatCredits,
   messageCredits,
   readPartCredits,
+  spendLines,
   sumSessionCredits,
   type CreditMessage,
   type CreditPart,
