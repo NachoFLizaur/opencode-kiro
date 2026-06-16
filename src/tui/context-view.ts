@@ -68,11 +68,22 @@ export function createContextView(api: TuiPluginApi, sessionID: string): DomNode
   // both in one session. One mutedLine per returned array element; deriving the
   // lines in a memo keeps each row reactive as cost()/credits() change while the
   // row COUNT stays dynamic (1 or 2).
+  //
+  // The reactive insert gets its OWN child container instead of sharing root.
+  // root's other lines are appended imperatively via insertNode, but Solid's
+  // reactive insert assumes it owns the parent's child list: with no marker its
+  // reconciler falls back to [getFirstChild(parent)] (root's header), so
+  // reconcileArrays/cleanChildren would clobber the imperative siblings and the
+  // cost subtree throws/renders nothing. A dedicated costBox lets insert fully own
+  // its children and render exactly the 1 or 2 rows the memo returns. An empty
+  // <text> would NOT collapse to zero height (TextBufferRenderable's measure func
+  // floors height to Math.max(1, lineCount)), so a fixed two-row form would leave a
+  // visible blank line in the single-row states; the owned container avoids that by
+  // rendering one node per array element only.
+  const costBox = createElement("box")
+  insertNode(root, costBox)
   const costLines = createMemo(() => spendLines({ cost: cost(), credits: credits() }))
-  insert(
-    root,
-    () => costLines().map((line) => mutedLine(theme, () => line)),
-  )
+  insert(costBox, () => costLines().map((line) => mutedLine(theme, () => line)))
   return root
 }
 
