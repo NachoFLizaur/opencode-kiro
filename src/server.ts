@@ -1,4 +1,4 @@
-import type { Hooks, PluginInput } from "@opencode-ai/plugin"
+import type { Hooks, Plugin, PluginInput } from "@opencode-ai/plugin"
 
 // Auth-only server plugin: the kiro provider/model catalog lives on models.dev,
 // so this only supplies the `auth` hook. Must never export `tui` (the loader
@@ -103,4 +103,10 @@ async function readToken(tokenPath: string | undefined) {
   }
 }
 
+// Named export for bundling: same function reference as the default's `server`,
+// so the two can't drift. Lets opencode do `import { KiroAuthPlugin }`, matching
+// GitlabAuthPlugin/PoeAuthPlugin/CopilotAuthPlugin.
+export const KiroAuthPlugin: Plugin = server
+
+// Default export drives opencode's external plugin loader, which reads `default`.
 export default { id: "kiro", server }

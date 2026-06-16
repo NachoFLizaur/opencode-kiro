@@ -101,4 +101,14 @@ describe("dist/server.js module isolation", () => {
 
     expect("tui" in mod).toBe(false)
   })
+
+  test("named KiroAuthPlugin is the same function as the default server", async () => {
+    // Bundling export: must be a function and the SAME reference as the
+    // default's `server`, so the two can't drift.
+    const mod = await importDist("server.js")
+    const def = mod.default as { server: unknown }
+
+    expect(typeof mod.KiroAuthPlugin).toBe("function")
+    expect(mod.KiroAuthPlugin).toBe(def.server)
+  })
 })
