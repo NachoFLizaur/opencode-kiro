@@ -353,4 +353,58 @@ describe("startup expiry nudge (notifyIfTokenExpired)", () => {
     await expect(notifyIfTokenExpired(undefined, path)).resolves.toBeUndefined()
     expect(warn).toHaveBeenCalledTimes(1)
   })
+
+  // FINDING F1 regression: a HEADLESS (non-TUI) run has no toast receiver, so
+  // showToast's promise NEVER settles. The old code AWAITED it, hanging startup
+  // forever (it hangs rather than throws, so the try/catch + .catch() never ran).
+  // This stub reproduces that exact condition; the fix logs FIRST and fires the
+  // toast WITHOUT awaiting, so the call must still resolve promptly. The prior
+  // tests only mock showToast to RESOLVE or THROW, so they never caught the hang.
+  test("F1: resolves promptly without awaiting a never-settling showToast (headless hang)", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+    const path = writeTokenFile({ accessToken: "a", expiresAt: isoFromNow(-1) })
+    // The precise F1 trigger: a toast promise that NEVER settles.
+    const showToast = vi.fn(() => new Promise<never>(() => {}))
+    const client = { tui: { showToast } } as unknown as PluginInput["client"]
+
+    // Race the call against a short timeout. If notifyIfTokenExpired AWAITED the
+    // never-settling toast it would lose this race (and hang the suite); winning
+    // it promptly proves the toast is fire-and-forget.
+    const start = Date.now()
+    const timeout = new Promise<"timeout">((r) => setTimeout(() => r("timeout"), 1000))
+    const outcome = await Promise.race([
+      notifyIfTokenExpired(client, path).then(() => "resolved" as const),
+      timeout,
+    ])
+
+    expect(outcome).toBe("resolved")
+    expect(Date.now() - start).toBeLessThan(1000)
+    // Toast was still invoked (fire-and-forget), just never awaited.
+    expect(showToast).toHaveBeenCalledTimes(1)
+    // LOG FIRST: the nudge line surfaced synchronously despite the dead toast.
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(warn.mock.calls[0][0]).toContain("kiro-cli login")
+  })
+
+  // F1, server(input) path: the startup nudge runs inside server(); proving the
+  // whole startup hook returns promptly even when its toast never settles guards
+  // against re-introducing an awaited UI call on the startup path.
+  test("F1: server(input) startup returns promptly when showToast never settles", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {})
+    const showToast = vi.fn(() => new Promise<never>(() => {}))
+    const input = {
+      directory: "/tmp/proj",
+      client: { tui: { showToast } },
+    } as unknown as PluginInput
+
+    const start = Date.now()
+    const timeout = new Promise<"timeout">((r) => setTimeout(() => r("timeout"), 1000))
+    const outcome = await Promise.race([
+      serverPlugin.server(input).then(() => "resolved" as const),
+      timeout,
+    ])
+
+    expect(outcome).toBe("resolved")
+    expect(Date.now() - start).toBeLessThan(1000)
+  })
 })

@@ -193,10 +193,17 @@ export async function readToken(
 }
 
 // Startup expiry nudge. When the kiro token is expired or missing, surface a
-// non-blocking toast (falling back to a log line if no TUI/toast is available)
-// telling the user to run kiro-cli login. MUST NEVER throw or reject: the auth
-// loader runs inside an Effect.promise, so any rejection becomes a defect that
-// crashes ALL providers. Every step is guarded.
+// non-blocking nudge telling the user to run kiro-cli login. MUST NEVER throw,
+// reject, OR BLOCK/HANG: the auth loader runs inside an Effect.promise, so any
+// rejection becomes a defect that crashes ALL providers, and a hang blocks
+// startup for every provider. Every step is guarded.
+//
+// FINDING F1: the LOG line is emitted FIRST, synchronously, and the toast is
+// FIRE-AND-FORGET (never awaited). A HEADLESS (non-TUI) run has no TUI receiver,
+// so showToast's promise NEVER resolves; awaiting it hung startup forever (it
+// hangs rather than throws, so the old try/catch + .catch() fallback never ran).
+// Logging first guarantees headless still gets the message; the toast is a
+// best-effort UI enhancement that only matters when a TUI is actually attached.
 export async function notifyIfTokenExpired(
   client: PluginInput["client"] | undefined,
   tokenPath: string,
@@ -208,18 +215,14 @@ export async function notifyIfTokenExpired(
     if (Number.isFinite(expiresAtMs) && expiresAtMs > Date.now()) return
 
     const message = "Kiro token expired or missing. Run 'kiro-cli login' to re-authenticate."
-    const tui = client?.tui
-    if (tui && typeof tui.showToast === "function") {
-      try {
-        await tui.showToast({ body: { message, variant: "warning" } })
-      } catch {
-        // TUI attached but the toast failed: fall back to a log line.
-        console.warn(`[opencode-kiro] ${message}`)
-      }
-    } else {
-      // No client/TUI/toast available: log as the fallback channel.
-      console.warn(`[opencode-kiro] ${message}`)
-    }
+
+    // 1) LOG FIRST: synchronous + reliable. The only channel guaranteed to reach
+    //    a headless (non-TUI) run, which has no receiver for a toast.
+    console.warn(message)
+
+    // 2) Toast is FIRE-AND-FORGET: do NOT await it. With no TUI attached the
+    //    promise never settles; awaiting it would hang startup (finding F1).
+    void client?.tui?.showToast?.({ body: { message, variant: "warning" } })?.catch(() => {})
   } catch {
     // Never rethrow: a rejection here becomes a defect that crashes all providers.
   }
