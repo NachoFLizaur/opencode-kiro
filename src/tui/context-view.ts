@@ -64,26 +64,28 @@ export function createContextView(api: TuiPluginApi, sessionID: string): DomNode
     mutedLine(theme, () => `${usage().percent ?? 0}% used`),
   )
   // Kiro credits and/or the builtin "$X spent" line: dollars only, credits only,
-  // or BOTH (two stacked lines "$X.XX spent" then "N credits") when a session used
-  // both in one session. One mutedLine per returned array element; deriving the
-  // lines in a memo keeps each row reactive as cost()/credits() change while the
-  // row COUNT stays dynamic (1 or 2).
+  // or BOTH (two stacked rows "$X.XX spent" then "N credits") when a session used
+  // both. ONE stable <text> node, exactly like the header/tokens/"% used" rows
+  // above (and exactly the single-node mechanism 0.1.3 shipped working): a fixed
+  // node appended once with insertNode, carrying a REACTIVE STRING that updates as
+  // cost()/credits() change.
   //
-  // The reactive insert gets its OWN child container instead of sharing root.
-  // root's other lines are appended imperatively via insertNode, but Solid's
-  // reactive insert assumes it owns the parent's child list: with no marker its
-  // reconciler falls back to [getFirstChild(parent)] (root's header), so
-  // reconcileArrays/cleanChildren would clobber the imperative siblings and the
-  // cost subtree throws/renders nothing. A dedicated costBox lets insert fully own
-  // its children and render exactly the 1 or 2 rows the memo returns. An empty
-  // <text> would NOT collapse to zero height (TextBufferRenderable's measure func
-  // floors height to Math.max(1, lineCount)), so a fixed two-row form would leave a
-  // visible blank line in the single-row states; the owned container avoids that by
-  // rendering one node per array element only.
-  const costBox = createElement("box")
-  insertNode(root, costBox)
+  // The 1-vs-2 row count rides inside that string: spendLines() returns 1 or 2
+  // entries, joined with "\n", and a <text> renders an embedded "\n" as that many
+  // stacked visual lines (verified live via tmux capture-pane: the BOTH state shows
+  // two stacked rows, the single states show exactly one with no stray blank line).
+  //
+  // Why NOT a reactive array-insert (the 0.1.4 root form / 0.1.5 owned-container
+  // form): Solid's reactive `insert(parent, () => nodes[])` reconciles the parent's
+  // child list, and that reconciliation's interaction with imperatively inserted
+  // siblings is opentui-reconciler-version dependent. A single stable node with a
+  // reactive string sidesteps reconciliation entirely, so it renders identically
+  // across opentui versions instead of only the one this was last tested against.
   const costLines = createMemo(() => spendLines({ cost: cost(), credits: credits() }))
-  insert(costBox, () => costLines().map((line) => mutedLine(theme, () => line)))
+  insertNode(
+    root,
+    mutedLine(theme, () => costLines().join("\n")),
+  )
   return root
 }
 
