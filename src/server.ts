@@ -95,7 +95,12 @@ const server = async (input: PluginInput): Promise<Hooks> => {
 
             // Not authed: launch kiro-cli login and poll
             const { execFile } = await import("node:child_process")
-            const child = execFile("kiro-cli", ["login"])
+            // shell:true on win32 so the bare "kiro-cli" name resolves via
+            // PATHEXT to kiro-cli.exe/.cmd (matches the SDK's own win32-safe
+            // spawns). shell:false on macOS/Linux keeps behavior identical.
+            const child = execFile("kiro-cli", ["login"], {
+              shell: process.platform === "win32",
+            })
 
             return {
               url: "",
