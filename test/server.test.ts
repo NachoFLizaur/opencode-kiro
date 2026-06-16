@@ -1,11 +1,30 @@
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import type { AuthHook, PluginInput } from "@opencode-ai/plugin"
-import { describe, expect, test } from "vitest"
+import { afterAll, afterEach, beforeAll, describe, expect, test } from "vitest"
 import serverPlugin from "../src/server"
 
 // Auth hook contract tests. The authorize() browser/poll flow isn't unit-tested
 // (it spawns kiro-cli); we assert only the method shape and the loader return.
+
+// Isolate XDG_CONFIG_HOME for the whole file so server()'s tui.json probe never
+// reads (or the consent tests never write) the developer's real ~/.config.
+let xdgDir: string
+let prevXdg: string | undefined
+beforeAll(() => {
+  prevXdg = process.env.XDG_CONFIG_HOME
+  xdgDir = mkdtempSync(join(tmpdir(), "kiro-tui-test-"))
+  process.env.XDG_CONFIG_HOME = xdgDir
+})
+afterAll(() => {
+  if (prevXdg === undefined) delete process.env.XDG_CONFIG_HOME
+  else process.env.XDG_CONFIG_HOME = prevXdg
+  rmSync(xdgDir, { recursive: true, force: true })
+})
+
+const tuiJsonPath = () => join(xdgDir, "opencode", "tui.json")
 
 /** Fake PluginInput; the server module only reads directory and worktree. */
 const makeInput = (input: { directory?: string; worktree?: string }): PluginInput =>
@@ -90,6 +109,56 @@ describe("server hooks", () => {
     const options = await hooks.auth?.loader?.(neverAuth, fakeProvider)
 
     expect(options?.cwd).toBe("/tmp/wt")
+  })
+})
+
+describe("sidebar consent prompt (tui.json probe)", () => {
+  // Each case controls the isolated tui.json that server() probes at startup.
+  afterEach(() => rmSync(join(xdgDir, "opencode"), { recursive: true, force: true }))
+
+  const sidebarPrompt = (hook: AuthHook | undefined) =>
+    hook?.methods[0]?.prompts?.find((p) => p.key === "sidebar")
+
+  test("offers the sidebar select when tui.json is not configured", async () => {
+    // No tui.json present -> not configured -> the consent prompt is shown.
+    const hooks = await serverPlugin.server(makeInput({ directory: "/tmp/proj" }))
+
+    const prompt = sidebarPrompt(hooks.auth)
+    expect(prompt?.type).toBe("select")
+    expect(prompt?.message).toBe("Enable the Kiro credits sidebar?")
+    expect(prompt && "options" in prompt ? prompt.options.map((o) => o.value) : []).toEqual([
+      "yes",
+      "no",
+    ])
+  })
+
+  test("omits the prompt when tui.json already has the sidebar configured", async () => {
+    // Seed an already-configured tui.json: opencode-kiro in `plugin` AND the
+    // builtin sidebar disabled -> "don't ask twice" -> empty prompts.
+    mkdirSync(dirname(tuiJsonPath()), { recursive: true })
+    writeFileSync(
+      tuiJsonPath(),
+      JSON.stringify({
+        theme: "kanagawa",
+        plugin: ["opencode-kiro"],
+        plugin_enabled: { "internal:sidebar-context": false },
+      }),
+    )
+
+    const hooks = await serverPlugin.server(makeInput({ directory: "/tmp/proj" }))
+
+    expect(hooks.auth?.methods[0]?.prompts).toEqual([])
+    expect(sidebarPrompt(hooks.auth)).toBeUndefined()
+  })
+
+  test("still offers the prompt when only partially configured", async () => {
+    // Plugin listed but builtin sidebar NOT disabled -> not fully configured.
+    mkdirSync(dirname(tuiJsonPath()), { recursive: true })
+    writeFileSync(tuiJsonPath(), JSON.stringify({ plugin: ["opencode-kiro"] }))
+
+    const hooks = await serverPlugin.server(makeInput({ directory: "/tmp/proj" }))
+
+    expect(sidebarPrompt(hooks.auth)?.type).toBe("select")
   })
 })
 
