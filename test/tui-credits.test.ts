@@ -78,7 +78,7 @@ describe("sumSessionCredits", () => {
 
     const result = sumSessionCredits(messages, partsByMessage)
 
-    expect(result).toEqual({ total: 6.5, unit: "credit" }) // 1 + 2 + 3.5
+    expect(result).toEqual({ total: 6.5, unit: "credit", present: true }) // 1 + 2 + 3.5
   })
 
   test("messages without metadata contribute 0", () => {
@@ -117,7 +117,20 @@ describe("sumSessionCredits", () => {
     expect(readPartCredits(wrongKey)).toBeUndefined()
     expect(creditsForMessage([otherNamespace, wrongKey])).toBeUndefined()
     const result = sumSessionCredits([assistant("msg_1")], () => [otherNamespace, wrongKey])
-    expect(result).toEqual({ total: 0, unit: undefined })
+    expect(result).toEqual({ total: 0, unit: undefined, present: false })
+  })
+
+  test("present distinguishes a real kiro turn from no kiro metadata", () => {
+    // The view picks credits-vs-"$X spent" off `present`, not `total`, because a
+    // genuine kiro turn worth 0 credits is indistinguishable from a non-kiro
+    // session by total alone.
+    const noKiro = sumSessionCredits([assistant("msg_1")], () => [{ type: "text", text: "plain" }])
+    expect(noKiro).toEqual({ total: 0, unit: undefined, present: false })
+
+    const zeroCreditKiroTurn = sumSessionCredits([assistant("msg_1")], () => [
+      carrierPart("text", { credits: 0, creditsUnit: "credit" }),
+    ])
+    expect(zeroCreditKiroTurn).toEqual({ total: 0, unit: "credit", present: true })
   })
 
   test("unit taken from most recent carrier", () => {

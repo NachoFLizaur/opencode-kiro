@@ -1,7 +1,10 @@
-// Full replacement for the builtin `internal:sidebar-context` box: tokens,
-// context percent (mirroring the builtin derivation), and a Kiro credits line
-// in place of the builtin "$X spent" (Kiro is subscription-metered, so dollar
-// cost is always $0.00).
+// Drop-in superset of the builtin `internal:sidebar-context` box: tokens,
+// context percent (mirroring the builtin derivation), and a 4th line that
+// degrades gracefully. When the session carries Kiro credit metadata it shows
+// the credits line; otherwise it shows the builtin's exact "$X spent" line
+// (`money.format(session.cost) + " spent"`). Because the builtin is disabled
+// globally once this plugin is wired up, this keeps non-kiro sessions looking
+// identical to today's builtin instead of a bare "0" credits line.
 //
 // Built with @opentui/solid's universal-renderer calls (what compiled Solid JSX
 // lowers to) so the dist needs no solid transform. @opentui/solid and solid-js
@@ -11,6 +14,9 @@ import type { AssistantMessage } from "@opencode-ai/sdk/v2"
 import { createElement, effect, insert, insertNode, setProp, type DomNode } from "@opentui/solid"
 import { createMemo } from "solid-js"
 import { formatCredits, sumSessionCredits } from "./credits.js"
+
+// Mirrors the builtin's formatter exactly (context.tsx): style currency, USD.
+const money = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" })
 
 type ThemeAccessor = () => TuiPluginApi["theme"]["current"]
 
@@ -45,6 +51,11 @@ export function createContextView(api: TuiPluginApi, sessionID: string): DomNode
   // message (from part.metadata?.kiro).
   const credits = createMemo(() => sumSessionCredits(messages(), (messageID) => api.state.part(messageID)))
 
+  // Builtin fallback: the session-level dollar cost the builtin reads via
+  // `api.state.session.get(id).cost`. Kiro is subscription-metered (cost stays
+  // $0.00), so this only ever surfaces for non-kiro sessions.
+  const cost = createMemo(() => api.state.session.get(sessionID)?.cost ?? 0)
+
   const root = createElement("box")
   insertNode(root, headerLine(theme))
   insertNode(
@@ -55,9 +66,12 @@ export function createContextView(api: TuiPluginApi, sessionID: string): DomNode
     root,
     mutedLine(theme, () => `${usage().percent ?? 0}% used`),
   )
+  // Kiro credits when present; otherwise the builtin's exact "$X spent" line.
   insertNode(
     root,
-    mutedLine(theme, () => formatCredits(credits().total, credits().unit)),
+    mutedLine(theme, () =>
+      credits().present ? formatCredits(credits().total, credits().unit) : `${money.format(cost())} spent`,
+    ),
   )
   return root
 }

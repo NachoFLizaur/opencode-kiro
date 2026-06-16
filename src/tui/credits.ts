@@ -25,6 +25,13 @@ export interface PartCredits {
 export interface SessionCredits {
   total: number
   unit?: string
+  /**
+   * True once any assistant message carried kiro credit metadata. Lets the
+   * sidebar/footer pick the credits view over the builtin "$X spent" fallback,
+   * since a credits total of 0 (a real kiro turn) is indistinguishable from
+   * "no kiro metadata at all" by `total` alone.
+   */
+  present: boolean
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -75,9 +82,10 @@ export function sumSessionCredits(
         return {
           total: acc.total + hit.credits,
           unit: hit.unit ?? acc.unit,
+          present: true,
         }
       },
-      { total: 0, unit: undefined },
+      { total: 0, unit: undefined, present: false },
     )
 }
 
