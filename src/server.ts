@@ -16,11 +16,11 @@ const SIDEBAR_PLUGIN_ID = "internal:sidebar-context"
 // re-runs on every startup, so we re-check the file each session and only ask
 // when it isn't already configured ("don't ask twice", covers re-auth).
 const server = async (input: PluginInput): Promise<Hooks> => {
-  // Startup expiry nudge (runs every session): if the kiro token is expired or
-  // missing, surface a non-blocking toast/log telling the user to re-auth. This
-  // is fully guarded and never throws; a rejection here would become a defect
-  // that crashes ALL providers.
-  await notifyIfTokenExpired(input.client, kiroTokenPath())
+  // Startup login nudge (runs every session): if kiro-cli whoami reports the
+  // user is not logged in, surface a non-blocking toast/log telling them to
+  // re-auth. This is fully guarded and never throws; a rejection here would
+  // become a defect that crashes ALL providers.
+  await notifyIfTokenExpired(input.client)
 
   const tuiPath = tuiConfigPath()
   const alreadyConfigured = isSidebarConfigured(await readTuiConfig(tuiPath))
@@ -152,51 +152,47 @@ async function readKiroTokenFile(
   }
 }
 
-// Parse the token's expiresAt into epoch ms. NaN when missing/unparseable so
-// callers can treat "no usable expiry" the same as "expired".
-function tokenExpiresAtMs(token: Record<string, unknown> | undefined): number {
-  const raw = token?.expiresAt
-  if (typeof raw === "number") return raw
-  if (typeof raw === "string") return Date.parse(raw)
-  return NaN
-}
-
-// Build opencode's auth record from the kiro-cli token file. Refuses to write a
-// record (returns {type:"failed"}) when the token is missing, unparseable, or
-// already expired so re-auth reports FAILURE instead of persisting a poisoned
-// record (refresh:"" + past expiry) that opencode would keep reloading. For a
-// valid token it carries the REAL refresh token from the file.
+// Build opencode's auth record, gated on kiro-cli whoami (verifyAuth), NOT the
+// on-disk token file. The file expiresAt is meaningless (kiro-cli does not
+// rewrite it on login; the live credential lives in the OS store and whoami
+// self-heals), so a stale or missing file MUST NOT refuse a logged-in user.
+// On success it emits a FUTURE expires so opencode-core does not flag the
+// provider, and carries the file's REAL refresh token when present.
 export async function readToken(
   tokenPath: string | undefined,
 ): Promise<
   | { type: "success"; refresh: string; access: string; expires: number }
   | { type: "failed" }
 > {
-  if (!tokenPath) return { type: "failed" as const }
+  // Authority = kiro-cli whoami (abstracts the per-OS credential store).
+  const { verifyAuth } = await import("kiro-acp-ai-provider")
+  if (!verifyAuth().authenticated) return { type: "failed" as const }
 
-  const token = await readKiroTokenFile(tokenPath)
-  if (!token) return { type: "failed" as const }
+  // Logged in. The cached file is OPTIONAL and only used for the real refresh
+  // token / cosmetic access value; a stale or missing file MUST NOT refuse a
+  // logged-in user (that was the core bug). Never throws.
+  const token = tokenPath ? await readKiroTokenFile(tokenPath) : undefined
+  const access = typeof token?.accessToken === "string" ? token.accessToken : ""
+  const refresh = typeof token?.refreshToken === "string" ? token.refreshToken : ""
 
-  const expiresAtMs = tokenExpiresAtMs(token)
-  if (!Number.isFinite(expiresAtMs) || expiresAtMs <= Date.now()) {
-    return { type: "failed" as const }
-  }
-
-  const access = typeof token.accessToken === "string" ? token.accessToken : ""
-  const refresh = typeof token.refreshToken === "string" ? token.refreshToken : ""
   return {
     type: "success" as const,
-    refresh, // REAL refresh token from the file, no longer the hardcoded ""
-    access: access || "authenticated",
-    expires: expiresAtMs,
+    refresh, // real refresh when present, else ""
+    access: access || "authenticated", // cosmetic; opencode-core only needs presence
+    // FUTURE expiry, refreshed every startup (server() re-runs each session) so
+    // opencode-core does not flag a logged-in user as expired. NOT the file value.
+    expires: Date.now() + 8 * 60 * 60 * 1000,
   }
 }
 
-// Startup expiry nudge. When the kiro token is expired or missing, surface a
-// non-blocking nudge telling the user to run kiro-cli login. MUST NEVER throw,
-// reject, OR BLOCK/HANG: the auth loader runs inside an Effect.promise, so any
-// rejection becomes a defect that crashes ALL providers, and a hang blocks
-// startup for every provider. Every step is guarded.
+// Startup login nudge. When kiro-cli whoami (verifyAuth) reports the user is
+// NOT logged in, surface a non-blocking nudge telling them to run kiro-cli
+// login. The gate is whoami, NOT the on-disk file expiresAt (which is
+// meaningless and false-warned on every startup). Because kiro-cli auto-re-
+// authenticates, a logged-in user reads authenticated=true and this is silent.
+// MUST NEVER throw, reject, OR BLOCK/HANG: the auth loader runs inside an
+// Effect.promise, so any rejection becomes a defect that crashes ALL providers,
+// and a hang blocks startup for every provider. Every step is guarded.
 //
 // FINDING F1: the LOG line is emitted FIRST, synchronously, and the toast is
 // FIRE-AND-FORGET (never awaited). A HEADLESS (non-TUI) run has no TUI receiver,
@@ -206,15 +202,12 @@ export async function readToken(
 // best-effort UI enhancement that only matters when a TUI is actually attached.
 export async function notifyIfTokenExpired(
   client: PluginInput["client"] | undefined,
-  tokenPath: string,
 ): Promise<void> {
   try {
-    const token = await readKiroTokenFile(tokenPath)
-    const expiresAtMs = tokenExpiresAtMs(token)
-    // Valid (parseable AND still in the future): nothing to nudge.
-    if (Number.isFinite(expiresAtMs) && expiresAtMs > Date.now()) return
+    const { verifyAuth } = await import("kiro-acp-ai-provider")
+    if (verifyAuth().authenticated) return // logged in per whoami: no nudge
 
-    const message = "Kiro token expired or missing. Run 'kiro-cli login' to re-authenticate."
+    const message = "Kiro is not logged in. Run 'kiro-cli login' to authenticate."
 
     // 1) LOG FIRST: synchronous + reliable. The only channel guaranteed to reach
     //    a headless (non-TUI) run, which has no receiver for a toast.

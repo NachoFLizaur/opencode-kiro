@@ -3,11 +3,28 @@ import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import type { AuthHook, PluginInput } from "@opencode-ai/plugin"
-import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vitest"
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest"
+import { verifyAuth } from "kiro-acp-ai-provider"
 import serverPlugin, { notifyIfTokenExpired, readToken } from "../src/server"
 
 // Auth hook contract tests. The authorize() browser/poll flow isn't unit-tested
 // (it spawns kiro-cli); we assert only the method shape and the loader return.
+
+// The auth gate is kiro-cli whoami via the SDK's verifyAuth(); mock it so unit
+// tests drive logged-in / logged-out states without spawning kiro-cli or needing
+// the SDK build. readToken/notifyIfTokenExpired consume the boolean only.
+vi.mock("kiro-acp-ai-provider", () => ({
+  verifyAuth: vi.fn(() => ({ installed: true, authenticated: true })),
+}))
+const mockVerifyAuth = vi.mocked(verifyAuth)
+
+// Default to logged-in for every test (the common case: kiro-cli auto-re-auths);
+// individual tests override to authenticated:false to exercise the failed/nudge
+// paths. Reset each test so a prior implementation/return value never leaks.
+beforeEach(() => {
+  mockVerifyAuth.mockReset()
+  mockVerifyAuth.mockReturnValue({ installed: true, authenticated: true })
+})
 
 // Isolate XDG_CONFIG_HOME for the whole file so server()'s tui.json probe never
 // reads (or the consent tests never write) the developer's real ~/.config.
@@ -209,67 +226,103 @@ const isoFromNow = (offsetMs: number): string => new Date(Date.now() + offsetMs)
 /** A missing path that definitely does not exist. */
 const missingTokenPath = (): string => join(tmpdir(), "kiro-missing-does-not-exist-xyz.json")
 
-describe("readToken (expiry refusal + real refresh)", () => {
-  test("valid token returns success carrying the REAL refresh token", async () => {
-    const expiresAt = isoFromNow(3_600_000) // 1h in the future
+describe("readToken (whoami-gated)", () => {
+  // THE CORE BUG (0.1.2 regression we are fixing): a logged-in user whose cached
+  // on-disk token file is STALE (expiresAt in the PAST) was wrongly refused. Now
+  // whoami (verifyAuth().authenticated) is the gate, so the stale file still
+  // yields success, a FUTURE expires, and the file's REAL refresh token.
+  test("logged-in user with a STALE file still returns success (core regression)", async () => {
+    mockVerifyAuth.mockReturnValue({ installed: true, authenticated: true })
+    const before = Date.now()
     const path = writeTokenFile({
       accessToken: "access-abc",
       refreshToken: "refresh-xyz",
-      expiresAt,
+      expiresAt: isoFromNow(-3_600_000), // 1h in the PAST: stale on disk
     })
 
     const result = await readToken(path)
 
     expect(result.type).toBe("success")
     if (result.type !== "success") throw new Error("expected success")
-    // The crux of fix 1: carry the file's real refreshToken, not the old "".
+    // Carries the file's REAL refresh token despite the past file expiry.
     expect(result.refresh).toBe("refresh-xyz")
     expect(result.access).toBe("access-abc")
-    expect(result.expires).toBe(Date.parse(expiresAt))
+    // expires is a FUTURE value (Date.now()+8h), NOT the file's past expiresAt.
+    expect(result.expires).toBeGreaterThan(before)
+    expect(result.expires).toBeGreaterThan(Date.now())
   })
 
-  test("expired token returns failed (refuses: no record written)", async () => {
+  test("logged-in user with a future-expiry file carries its real refresh", async () => {
+    mockVerifyAuth.mockReturnValue({ installed: true, authenticated: true })
     const path = writeTokenFile({
       accessToken: "access-abc",
       refreshToken: "refresh-xyz",
-      expiresAt: isoFromNow(-3_600_000), // 1h in the past
+      expiresAt: isoFromNow(3_600_000),
     })
 
-    expect(await readToken(path)).toEqual({ type: "failed" })
+    const result = await readToken(path)
+
+    expect(result.type).toBe("success")
+    if (result.type !== "success") throw new Error("expected success")
+    expect(result.refresh).toBe("refresh-xyz")
+    expect(result.access).toBe("access-abc")
+    expect(result.expires).toBeGreaterThan(Date.now())
   })
 
-  test("missing expiresAt returns failed", async () => {
-    const path = writeTokenFile({ accessToken: "access-abc", refreshToken: "refresh-xyz" })
+  test("logged-in user with NO token file still returns success (file is optional)", async () => {
+    mockVerifyAuth.mockReturnValue({ installed: true, authenticated: true })
 
-    expect(await readToken(path)).toEqual({ type: "failed" })
+    const result = await readToken(undefined)
+
+    expect(result.type).toBe("success")
+    if (result.type !== "success") throw new Error("expected success")
+    expect(result.refresh).toBe("")
+    expect(result.access).toBe("authenticated")
+    expect(result.expires).toBeGreaterThan(Date.now())
   })
 
-  test("unparseable expiresAt returns failed", async () => {
-    const path = writeTokenFile({
-      accessToken: "access-abc",
-      refreshToken: "refresh-xyz",
-      expiresAt: "not-a-date",
-    })
+  test("logged-in user with a missing file path still returns success", async () => {
+    mockVerifyAuth.mockReturnValue({ installed: true, authenticated: true })
 
-    expect(await readToken(path)).toEqual({ type: "failed" })
+    const result = await readToken(missingTokenPath())
+
+    expect(result.type).toBe("success")
+    if (result.type !== "success") throw new Error("expected success")
+    expect(result.refresh).toBe("")
+    expect(result.access).toBe("authenticated")
   })
 
-  test("undefined tokenPath returns failed (no fabricated 1h success)", async () => {
-    expect(await readToken(undefined)).toEqual({ type: "failed" })
-  })
-
-  test("nonexistent file returns failed", async () => {
-    expect(await readToken(missingTokenPath())).toEqual({ type: "failed" })
-  })
-
-  test("invalid JSON returns failed", async () => {
+  test("logged-in user with an invalid-JSON file still returns success (file ignored)", async () => {
+    mockVerifyAuth.mockReturnValue({ installed: true, authenticated: true })
     const path = writeTokenFile("{ not valid json")
 
+    const result = await readToken(path)
+
+    expect(result.type).toBe("success")
+    if (result.type !== "success") throw new Error("expected success")
+    expect(result.refresh).toBe("")
+    expect(result.access).toBe("authenticated")
+  })
+
+  test("NOT logged in returns failed even with a valid file present (no record)", async () => {
+    mockVerifyAuth.mockReturnValue({ installed: true, authenticated: false })
+    const path = writeTokenFile({
+      accessToken: "access-abc",
+      refreshToken: "refresh-xyz",
+      expiresAt: isoFromNow(3_600_000),
+    })
+
     expect(await readToken(path)).toEqual({ type: "failed" })
+  })
+
+  test("NOT logged in with no token file returns failed", async () => {
+    mockVerifyAuth.mockReturnValue({ installed: true, authenticated: false })
+
+    expect(await readToken(undefined)).toEqual({ type: "failed" })
   })
 })
 
-describe("startup expiry nudge (notifyIfTokenExpired)", () => {
+describe("startup login nudge (notifyIfTokenExpired)", () => {
   afterEach(() => vi.restoreAllMocks())
 
   /** Fake client whose showToast records its calls. */
@@ -291,66 +344,58 @@ describe("startup expiry nudge (notifyIfTokenExpired)", () => {
       },
     }) as unknown as PluginInput["client"]
 
-  test("fires a warning toast naming kiro-cli login on an expired token", async () => {
-    const path = writeTokenFile({ accessToken: "a", expiresAt: isoFromNow(-1) })
+  test("is SILENT for a logged-in user (no false-fire on every startup)", async () => {
+    // whoami reports logged in (the common case: kiro-cli auto-re-auths).
+    mockVerifyAuth.mockReturnValue({ installed: true, authenticated: true })
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
     const { client, showToast } = makeToastClient()
 
-    await notifyIfTokenExpired(client, path)
+    await notifyIfTokenExpired(client)
 
+    expect(showToast).not.toHaveBeenCalled()
+    expect(warn).not.toHaveBeenCalled()
+  })
+
+  test("fires a warning toast naming kiro-cli login when NOT logged in", async () => {
+    mockVerifyAuth.mockReturnValue({ installed: true, authenticated: false })
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+    const { client, showToast } = makeToastClient()
+
+    await notifyIfTokenExpired(client)
+
+    expect(warn).toHaveBeenCalledTimes(1)
     expect(showToast).toHaveBeenCalledTimes(1)
     const arg = showToast.mock.calls[0][0]
     expect(arg.body.variant).toBe("warning")
     expect(arg.body.message).toContain("kiro-cli login")
   })
 
-  test("fires the nudge when the token file is missing", async () => {
-    const { client, showToast } = makeToastClient()
-
-    await notifyIfTokenExpired(client, missingTokenPath())
-
-    expect(showToast).toHaveBeenCalledTimes(1)
-  })
-
-  test("does NOT fire on a valid (future-expiry) token", async () => {
-    const path = writeTokenFile({ accessToken: "a", expiresAt: isoFromNow(3_600_000) })
-    const { client, showToast } = makeToastClient()
-
-    await notifyIfTokenExpired(client, path)
-
-    expect(showToast).not.toHaveBeenCalled()
-  })
-
-  test("never throws when the token file is missing AND showToast throws", async () => {
+  test("logs the fallback nudge when not logged in and no client/TUI is available", async () => {
+    mockVerifyAuth.mockReturnValue({ installed: true, authenticated: false })
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
 
-    await expect(
-      notifyIfTokenExpired(makeThrowingClient(), missingTokenPath()),
-    ).resolves.toBeUndefined()
-    // Toast failed -> fell back to a log line.
+    await expect(notifyIfTokenExpired(undefined)).resolves.toBeUndefined()
     expect(warn).toHaveBeenCalledTimes(1)
+    expect(warn.mock.calls[0][0]).toContain("kiro-cli login")
   })
 
-  test("never throws when JSON is invalid AND showToast throws", async () => {
+  test("never throws when verifyAuth itself throws (gate fails closed, no nudge)", async () => {
+    mockVerifyAuth.mockImplementation(() => {
+      throw new Error("whoami boom")
+    })
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
-    const path = writeTokenFile("{ not json")
 
-    await expect(notifyIfTokenExpired(makeThrowingClient(), path)).resolves.toBeUndefined()
-    expect(warn).toHaveBeenCalledTimes(1)
+    await expect(notifyIfTokenExpired(makeThrowingClient())).resolves.toBeUndefined()
+    // The gate threw before the log line; no nudge is emitted, but never throws.
+    expect(warn).not.toHaveBeenCalled()
   })
 
-  test("never throws when showToast throws on an expired token", async () => {
+  test("never throws when NOT logged in AND showToast throws (log-first still fires)", async () => {
+    mockVerifyAuth.mockReturnValue({ installed: true, authenticated: false })
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
-    const path = writeTokenFile({ accessToken: "a", expiresAt: isoFromNow(-1) })
 
-    await expect(notifyIfTokenExpired(makeThrowingClient(), path)).resolves.toBeUndefined()
-    expect(warn).toHaveBeenCalledTimes(1)
-  })
-
-  test("logs the fallback nudge when no client/TUI is available", async () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
-    const path = writeTokenFile({ accessToken: "a", expiresAt: isoFromNow(-1) })
-
-    await expect(notifyIfTokenExpired(undefined, path)).resolves.toBeUndefined()
+    await expect(notifyIfTokenExpired(makeThrowingClient())).resolves.toBeUndefined()
+    // Toast rejected -> the log line still surfaced first.
     expect(warn).toHaveBeenCalledTimes(1)
   })
 
@@ -358,11 +403,11 @@ describe("startup expiry nudge (notifyIfTokenExpired)", () => {
   // showToast's promise NEVER settles. The old code AWAITED it, hanging startup
   // forever (it hangs rather than throws, so the try/catch + .catch() never ran).
   // This stub reproduces that exact condition; the fix logs FIRST and fires the
-  // toast WITHOUT awaiting, so the call must still resolve promptly. The prior
+  // toast WITHOUT awaiting, so the call must still resolve promptly. The other
   // tests only mock showToast to RESOLVE or THROW, so they never caught the hang.
   test("F1: resolves promptly without awaiting a never-settling showToast (headless hang)", async () => {
+    mockVerifyAuth.mockReturnValue({ installed: true, authenticated: false })
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
-    const path = writeTokenFile({ accessToken: "a", expiresAt: isoFromNow(-1) })
     // The precise F1 trigger: a toast promise that NEVER settles.
     const showToast = vi.fn(() => new Promise<never>(() => {}))
     const client = { tui: { showToast } } as unknown as PluginInput["client"]
@@ -373,7 +418,7 @@ describe("startup expiry nudge (notifyIfTokenExpired)", () => {
     const start = Date.now()
     const timeout = new Promise<"timeout">((r) => setTimeout(() => r("timeout"), 1000))
     const outcome = await Promise.race([
-      notifyIfTokenExpired(client, path).then(() => "resolved" as const),
+      notifyIfTokenExpired(client).then(() => "resolved" as const),
       timeout,
     ])
 
@@ -390,6 +435,7 @@ describe("startup expiry nudge (notifyIfTokenExpired)", () => {
   // whole startup hook returns promptly even when its toast never settles guards
   // against re-introducing an awaited UI call on the startup path.
   test("F1: server(input) startup returns promptly when showToast never settles", async () => {
+    mockVerifyAuth.mockReturnValue({ installed: true, authenticated: false })
     vi.spyOn(console, "warn").mockImplementation(() => {})
     const showToast = vi.fn(() => new Promise<never>(() => {}))
     const input = {
