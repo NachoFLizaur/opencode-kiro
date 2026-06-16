@@ -16,6 +16,12 @@ const SIDEBAR_PLUGIN_ID = "internal:sidebar-context"
 // re-runs on every startup, so we re-check the file each session and only ask
 // when it isn't already configured ("don't ask twice", covers re-auth).
 const server = async (input: PluginInput): Promise<Hooks> => {
+  // Startup expiry nudge (runs every session): if the kiro token is expired or
+  // missing, surface a non-blocking toast/log telling the user to re-auth. This
+  // is fully guarded and never throws; a rejection here would become a defect
+  // that crashes ALL providers.
+  await notifyIfTokenExpired(input.client, kiroTokenPath())
+
   const tuiPath = tuiConfigPath()
   const alreadyConfigured = isSidebarConfigured(await readTuiConfig(tuiPath))
 
@@ -123,28 +129,99 @@ const server = async (input: PluginInput): Promise<Hooks> => {
   }
 }
 
-async function readToken(tokenPath: string | undefined) {
-  if (tokenPath) {
-    try {
-      const { readFileSync } = await import("node:fs")
-      const raw = JSON.parse(readFileSync(tokenPath, "utf8"))
-      return {
-        type: "success" as const,
-        refresh: "",
-        access: raw.accessToken || "authenticated",
-        expires: raw.expiresAt
-          ? new Date(raw.expiresAt).getTime()
-          : Date.now() + 3600000,
-      }
-    } catch {
-      return { type: "failed" as const }
-    }
+// The kiro-cli token file path the SDK reads (~/.aws/sso/cache/kiro-auth-token.json).
+// Kept in sync with kiro-acp-ai-provider's verifyAuth() resolution so the startup
+// check inspects the SAME file the provider authenticates against.
+export function kiroTokenPath(): string {
+  return join(homedir(), ".aws", "sso", "cache", "kiro-auth-token.json")
+}
+
+// Read+parse the kiro-cli token file. Returns the parsed object, or undefined
+// when the file is missing, unreadable, or not a JSON object. Never throws.
+async function readKiroTokenFile(
+  tokenPath: string,
+): Promise<Record<string, unknown> | undefined> {
+  try {
+    const { readFile } = await import("node:fs/promises")
+    const parsed = JSON.parse(await readFile(tokenPath, "utf8"))
+    return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : undefined
+  } catch {
+    return undefined
   }
+}
+
+// Parse the token's expiresAt into epoch ms. NaN when missing/unparseable so
+// callers can treat "no usable expiry" the same as "expired".
+function tokenExpiresAtMs(token: Record<string, unknown> | undefined): number {
+  const raw = token?.expiresAt
+  if (typeof raw === "number") return raw
+  if (typeof raw === "string") return Date.parse(raw)
+  return NaN
+}
+
+// Build opencode's auth record from the kiro-cli token file. Refuses to write a
+// record (returns {type:"failed"}) when the token is missing, unparseable, or
+// already expired so re-auth reports FAILURE instead of persisting a poisoned
+// record (refresh:"" + past expiry) that opencode would keep reloading. For a
+// valid token it carries the REAL refresh token from the file.
+export async function readToken(
+  tokenPath: string | undefined,
+): Promise<
+  | { type: "success"; refresh: string; access: string; expires: number }
+  | { type: "failed" }
+> {
+  if (!tokenPath) return { type: "failed" as const }
+
+  const token = await readKiroTokenFile(tokenPath)
+  if (!token) return { type: "failed" as const }
+
+  const expiresAtMs = tokenExpiresAtMs(token)
+  if (!Number.isFinite(expiresAtMs) || expiresAtMs <= Date.now()) {
+    return { type: "failed" as const }
+  }
+
+  const access = typeof token.accessToken === "string" ? token.accessToken : ""
+  const refresh = typeof token.refreshToken === "string" ? token.refreshToken : ""
   return {
     type: "success" as const,
-    refresh: "",
-    access: "authenticated",
-    expires: Date.now() + 3600000,
+    refresh, // REAL refresh token from the file, no longer the hardcoded ""
+    access: access || "authenticated",
+    expires: expiresAtMs,
+  }
+}
+
+// Startup expiry nudge. When the kiro token is expired or missing, surface a
+// non-blocking toast (falling back to a log line if no TUI/toast is available)
+// telling the user to run kiro-cli login. MUST NEVER throw or reject: the auth
+// loader runs inside an Effect.promise, so any rejection becomes a defect that
+// crashes ALL providers. Every step is guarded.
+export async function notifyIfTokenExpired(
+  client: PluginInput["client"] | undefined,
+  tokenPath: string,
+): Promise<void> {
+  try {
+    const token = await readKiroTokenFile(tokenPath)
+    const expiresAtMs = tokenExpiresAtMs(token)
+    // Valid (parseable AND still in the future): nothing to nudge.
+    if (Number.isFinite(expiresAtMs) && expiresAtMs > Date.now()) return
+
+    const message = "Kiro token expired or missing. Run 'kiro-cli login' to re-authenticate."
+    const tui = client?.tui
+    if (tui && typeof tui.showToast === "function") {
+      try {
+        await tui.showToast({ body: { message, variant: "warning" } })
+      } catch {
+        // TUI attached but the toast failed: fall back to a log line.
+        console.warn(`[opencode-kiro] ${message}`)
+      }
+    } else {
+      // No client/TUI/toast available: log as the fallback channel.
+      console.warn(`[opencode-kiro] ${message}`)
+    }
+  } catch {
+    // Never rethrow: a rejection here becomes a defect that crashes all providers.
   }
 }
 
@@ -187,7 +264,7 @@ function isSidebarConfigured(config: Record<string, unknown> | undefined): boole
 // Idempotently merge the credits-sidebar config into the global tui.json after a
 // successful login. Defensive + non-destructive: starts from {} when the file is
 // missing, bails (no write) when it exists but is unparseable, preserves all
-// other keys, and NEVER throws — a config-write failure must not fail auth.
+// other keys, and NEVER throws: a config-write failure must not fail auth.
 async function enableSidebarConfig(path: string, input: PluginInput): Promise<void> {
   try {
     const { readFile, writeFile, mkdir } = await import("node:fs/promises")
@@ -240,7 +317,7 @@ async function enableSidebarConfig(path: string, input: PluginInput): Promise<vo
     try {
       await input.client.tui.showToast({
         body: {
-          message: "Kiro credits sidebar enabled — restart opencode to see it.",
+          message: "Kiro credits sidebar enabled. Restart opencode to see it.",
           variant: "success",
         },
       })

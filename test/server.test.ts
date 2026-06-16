@@ -3,8 +3,8 @@ import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import type { AuthHook, PluginInput } from "@opencode-ai/plugin"
-import { afterAll, afterEach, beforeAll, describe, expect, test } from "vitest"
-import serverPlugin from "../src/server"
+import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vitest"
+import serverPlugin, { notifyIfTokenExpired, readToken } from "../src/server"
 
 // Auth hook contract tests. The authorize() browser/poll flow isn't unit-tested
 // (it spawns kiro-cli); we assert only the method shape and the loader return.
@@ -26,9 +26,13 @@ afterAll(() => {
 
 const tuiJsonPath = () => join(xdgDir, "opencode", "tui.json")
 
-/** Fake PluginInput; the server module only reads directory and worktree. */
+/**
+ * Fake PluginInput. The server module reads directory/worktree and, at startup,
+ * calls input.client.tui.showToast for the expiry nudge; stub it so server()
+ * exercises the toast path (not the console.warn fallback) during these tests.
+ */
 const makeInput = (input: { directory?: string; worktree?: string }): PluginInput =>
-  input as unknown as PluginInput
+  ({ ...input, client: { tui: { showToast: async () => true } } }) as unknown as PluginInput
 
 type LoaderFn = NonNullable<AuthHook["loader"]>
 
@@ -179,5 +183,174 @@ describe("dist/server.js module isolation", () => {
 
     expect(typeof mod.KiroAuthPlugin).toBe("function")
     expect(mod.KiroAuthPlugin).toBe(def.server)
+  })
+})
+
+// Token-file helpers shared by the readToken + startup-nudge suites. Each writes
+// an isolated temp kiro-auth-token.json so tests never touch the real
+// ~/.aws/sso/cache file (and never spawn kiro-cli).
+const tokenDirs: string[] = []
+afterEach(() => {
+  while (tokenDirs.length) rmSync(tokenDirs.pop() as string, { recursive: true, force: true })
+})
+
+/** Write a token file (JSON body or raw string) and return its path. */
+const writeTokenFile = (content: unknown): string => {
+  const dir = mkdtempSync(join(tmpdir(), "kiro-token-"))
+  tokenDirs.push(dir)
+  const path = join(dir, "kiro-auth-token.json")
+  writeFileSync(path, typeof content === "string" ? content : JSON.stringify(content))
+  return path
+}
+
+/** ISO timestamp offset from now (positive = future, negative = past). */
+const isoFromNow = (offsetMs: number): string => new Date(Date.now() + offsetMs).toISOString()
+
+/** A missing path that definitely does not exist. */
+const missingTokenPath = (): string => join(tmpdir(), "kiro-missing-does-not-exist-xyz.json")
+
+describe("readToken (expiry refusal + real refresh)", () => {
+  test("valid token returns success carrying the REAL refresh token", async () => {
+    const expiresAt = isoFromNow(3_600_000) // 1h in the future
+    const path = writeTokenFile({
+      accessToken: "access-abc",
+      refreshToken: "refresh-xyz",
+      expiresAt,
+    })
+
+    const result = await readToken(path)
+
+    expect(result.type).toBe("success")
+    if (result.type !== "success") throw new Error("expected success")
+    // The crux of fix 1: carry the file's real refreshToken, not the old "".
+    expect(result.refresh).toBe("refresh-xyz")
+    expect(result.access).toBe("access-abc")
+    expect(result.expires).toBe(Date.parse(expiresAt))
+  })
+
+  test("expired token returns failed (refuses: no record written)", async () => {
+    const path = writeTokenFile({
+      accessToken: "access-abc",
+      refreshToken: "refresh-xyz",
+      expiresAt: isoFromNow(-3_600_000), // 1h in the past
+    })
+
+    expect(await readToken(path)).toEqual({ type: "failed" })
+  })
+
+  test("missing expiresAt returns failed", async () => {
+    const path = writeTokenFile({ accessToken: "access-abc", refreshToken: "refresh-xyz" })
+
+    expect(await readToken(path)).toEqual({ type: "failed" })
+  })
+
+  test("unparseable expiresAt returns failed", async () => {
+    const path = writeTokenFile({
+      accessToken: "access-abc",
+      refreshToken: "refresh-xyz",
+      expiresAt: "not-a-date",
+    })
+
+    expect(await readToken(path)).toEqual({ type: "failed" })
+  })
+
+  test("undefined tokenPath returns failed (no fabricated 1h success)", async () => {
+    expect(await readToken(undefined)).toEqual({ type: "failed" })
+  })
+
+  test("nonexistent file returns failed", async () => {
+    expect(await readToken(missingTokenPath())).toEqual({ type: "failed" })
+  })
+
+  test("invalid JSON returns failed", async () => {
+    const path = writeTokenFile("{ not valid json")
+
+    expect(await readToken(path)).toEqual({ type: "failed" })
+  })
+})
+
+describe("startup expiry nudge (notifyIfTokenExpired)", () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  /** Fake client whose showToast records its calls. */
+  const makeToastClient = () => {
+    const showToast = vi.fn(
+      async (_opts: { body: { message: string; variant: string } }) => true,
+    )
+    const client = { tui: { showToast } } as unknown as PluginInput["client"]
+    return { client, showToast }
+  }
+
+  /** Fake client whose showToast always rejects. */
+  const makeThrowingClient = () =>
+    ({
+      tui: {
+        showToast: async () => {
+          throw new Error("toast boom")
+        },
+      },
+    }) as unknown as PluginInput["client"]
+
+  test("fires a warning toast naming kiro-cli login on an expired token", async () => {
+    const path = writeTokenFile({ accessToken: "a", expiresAt: isoFromNow(-1) })
+    const { client, showToast } = makeToastClient()
+
+    await notifyIfTokenExpired(client, path)
+
+    expect(showToast).toHaveBeenCalledTimes(1)
+    const arg = showToast.mock.calls[0][0]
+    expect(arg.body.variant).toBe("warning")
+    expect(arg.body.message).toContain("kiro-cli login")
+  })
+
+  test("fires the nudge when the token file is missing", async () => {
+    const { client, showToast } = makeToastClient()
+
+    await notifyIfTokenExpired(client, missingTokenPath())
+
+    expect(showToast).toHaveBeenCalledTimes(1)
+  })
+
+  test("does NOT fire on a valid (future-expiry) token", async () => {
+    const path = writeTokenFile({ accessToken: "a", expiresAt: isoFromNow(3_600_000) })
+    const { client, showToast } = makeToastClient()
+
+    await notifyIfTokenExpired(client, path)
+
+    expect(showToast).not.toHaveBeenCalled()
+  })
+
+  test("never throws when the token file is missing AND showToast throws", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+
+    await expect(
+      notifyIfTokenExpired(makeThrowingClient(), missingTokenPath()),
+    ).resolves.toBeUndefined()
+    // Toast failed -> fell back to a log line.
+    expect(warn).toHaveBeenCalledTimes(1)
+  })
+
+  test("never throws when JSON is invalid AND showToast throws", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+    const path = writeTokenFile("{ not json")
+
+    await expect(notifyIfTokenExpired(makeThrowingClient(), path)).resolves.toBeUndefined()
+    expect(warn).toHaveBeenCalledTimes(1)
+  })
+
+  test("never throws when showToast throws on an expired token", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+    const path = writeTokenFile({ accessToken: "a", expiresAt: isoFromNow(-1) })
+
+    await expect(notifyIfTokenExpired(makeThrowingClient(), path)).resolves.toBeUndefined()
+    expect(warn).toHaveBeenCalledTimes(1)
+  })
+
+  test("logs the fallback nudge when no client/TUI is available", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+    const path = writeTokenFile({ accessToken: "a", expiresAt: isoFromNow(-1) })
+
+    await expect(notifyIfTokenExpired(undefined, path)).resolves.toBeUndefined()
+    expect(warn).toHaveBeenCalledTimes(1)
   })
 })
