@@ -2,9 +2,8 @@
 
 The ACP-compliant [Kiro](https://kiro.dev) auth plugin for [opencode](https://opencode.ai).
 
-opencode learns the `kiro` provider and its 12 models from the
-[models.dev](https://models.dev) catalog, exactly like the first-party Copilot and
-GitLab integrations. This plugin supplies the piece the catalog can't: the **auth**.
+opencode learns the `kiro` provider and its available models (US region) from the
+[models.dev](https://models.dev) catalog. This plugin supplies the following pieces:
 
 - **Auth** via the official `kiro-cli` login flow (`opencode auth login`, then "Kiro CLI Login")
 - **Provider options loader**: the `cwd`, `agent`, `trustAllTools`, `mcpTimeout` values
@@ -19,13 +18,12 @@ the catalog's `npm` field. This is the supported integration path: requests go t
 kiro-cli exactly like Kiro's own IDE clients, with no credential scraping and no reuse of
 Kiro credentials against other providers.
 
-Not affiliated with any other kiro-named npm packages.
-
 ## Prerequisites
 
 | Requirement | Notes |
 |---|---|
 | [kiro-cli](https://kiro.dev/docs/cli/) | Must be installed and on `PATH`; a Kiro subscription / AWS Builder ID account |
+| [Node.js](https://nodejs.org) `>= 20` | Enforced via `engines.node`. |
 | opencode `>= 1.16.0` | Enforced via `engines.opencode` on released builds. The shipped catalog must include the `kiro` provider (see [Troubleshooting](#troubleshooting)). |
 
 ## Install
@@ -127,27 +125,10 @@ If the flow times out, authenticate directly with kiro-cli (`kiro-cli login`) an
 
 ## Models
 
-12 models, defined in the [models.dev](https://models.dev) `kiro` catalog entry. opencode
-loads them from there; the table below is a convenience snapshot, not the source of
-truth. All models support tool calling and have a 64K-token output limit.
-
-| Model | ID | Context window | Image input |
-|---|---|---|---|
-| Auto | `auto` | 1,000,000 | yes |
-| Claude Haiku 4.5 | `claude-haiku-4.5` | 200,000 | yes |
-| Claude Opus 4.5 | `claude-opus-4.5` | 200,000 | yes |
-| Claude Opus 4.6 | `claude-opus-4.6` | 1,000,000 | yes |
-| Claude Opus 4.7 | `claude-opus-4.7` | 1,000,000 | yes |
-| Claude Sonnet 4 | `claude-sonnet-4` | 200,000 | yes |
-| Claude Sonnet 4.5 | `claude-sonnet-4.5` | 200,000 | yes |
-| Claude Sonnet 4.6 | `claude-sonnet-4.6` | 1,000,000 | yes |
-| Deepseek v3.2 | `deepseek-3.2` | 164,000 | yes |
-| MiniMax M2.1 | `minimax-m2.1` | 196,000 | yes |
-| MiniMax M2.5 | `minimax-m2.5` | 196,000 | no |
-| Qwen3 Coder Next | `qwen3-coder-next` | 256,000 | yes |
-
+This plugin supports all models in the US region, defined in the [models.dev](https://models.dev) `kiro`
+catalog entry. opencode loads them from there. List them with:
 ```bash
-opencode models           # lists kiro/auto, kiro/claude-sonnet-4.6, ...
+opencode models           # lists kiro/auto, kiro/claude-opus-4.8, ...
 opencode run -m kiro/auto "hello"
 ```
 
@@ -178,8 +159,8 @@ Disable the builtin box in `tui.json` so only the replacement renders:
 ```
 
 Without this you will see **two** context boxes (cosmetic duplication: the builtin
-one plus the plugin's). The credits value and its unit come from provider metadata
-emitted by the SDK (kiro-cli reports the unit); nothing is hardcoded client-side.
+one plus the plugin's). The credits value and its unit come from the metadata the SDK
+attaches to each message part (kiro-cli reports the unit); nothing is hardcoded client-side.
 
 Trade-off: the replacement box applies to **every** session and disabling the builtin
 is global. The replacement reproduces the builtin `$X.XX spent` line for non-Kiro
@@ -187,11 +168,11 @@ sessions (and stacks it above credits when a session used both), so mixed-provid
 users keep dollar cost in the sidebar; if you prefer the original built-in box, leave
 it enabled at the cost of the duplicate box.
 
-## Known limitation (read this)
+## Known limitation
 
 **Credits render in the TUI only.** Two TUI surfaces show them: the sidebar context
 box (above) and the input/prompt meta row chip (`session_prompt_right`), which sits
-beside the host's `$` cost chip. Every other cost surface (ACP clients, the web app,
+above the host's `$` cost chip. Every other cost surface (ACP clients, the web app,
 desktop, web share pages, and CLI cost output) shows $0.00 for Kiro sessions. The
 models.dev catalog declares Kiro's per-token `cost` as 0 (it is a subscription-metered
 provider with no per-token pricing), so opencode core computes $0.00 everywhere it
@@ -216,11 +197,11 @@ would require opencode core changes and is intentionally out of scope for this p
   `kiro-acp-ai-provider` to check kiro-cli installation/login state.
 - **Session affinity & reset (in-SDK)**: the SDK keys kiro-cli sessions off opencode's
   `x-session-affinity` header, isolates tool-less utility calls (title generation) on
-  an ephemeral session, detects prompt-history divergence (fork/`/undo`), and starts a
+  an ephemeral session, detects prompt-history divergence (`fork/undo`), and starts a
   fresh kiro session when needed. No host-side session plumbing.
-- **Credits metadata**: the SDK attaches `{ kiro: { credits, creditsUnit } }` provider
-  metadata to the final part of each turn; opencode persists it, and the TUI plugin
-  sums it per assistant message (deduped across text/reasoning parts) for the sidebar.
+- **Credits metadata**: the SDK attaches `{ kiro: { credits, creditsUnit } }` to the
+  `metadata` of the final message part of each turn; opencode persists it, and the TUI
+  plugin sums it per assistant message (deduped across text/reasoning parts) for the sidebar.
 
 ## Troubleshooting
 
@@ -230,8 +211,9 @@ would require opencode core changes and is intentionally out of scope for this p
 | Auth times out after ~120s | Complete the browser login faster, or run `kiro-cli login` yourself, then re-run `opencode auth login` (fast path). |
 | Two "Context" boxes in the sidebar | Add `"plugin_enabled": { "internal:sidebar-context": false }` to `tui.json` (see [Credits in the sidebar](#credits-in-the-sidebar)). |
 | No credits line / credits stay 0 | Credits appear after the first **completed** kiro turn; cancelled turns and turns without usage metadata contribute nothing. Check the TUI plugin is `active` in the Plugins dialog (and listed in `tui.json`). |
+| Credits sidebar box never appears (even with `tui.json` configured correctly) | The TUI credits box renders only when `opencode-kiro` is resolvable in opencode's package cache. If the package is missing from the cache the box silently does not appear. Fix: ensure `opencode-kiro` is installed so it resolves in the cache. Do **not** manually clear the package cache: clearing can trigger a flaky on-demand refetch that fails with an "unknown git error". |
 | `kiro` provider not showing in `opencode models` | The provider comes from the models.dev catalog, not this plugin. Ensure your opencode version ships a catalog that includes `kiro` (run `opencode models --refresh` to update the cache). For local development, point opencode at a kiro-inclusive catalog via `OPENCODE_MODELS_PATH=/path/to/api.json` (see [Local development](#local-development-path-source)). |
-| `sdk.languageModel is not a function` | A stale `kiro-acp-ai-provider` < 2.0.0 resolved from opencode's package cache. Remove the cached copy (`$XDG_CACHE_HOME/opencode/packages/kiro-acp-ai-provider`, default `~/.cache/opencode/packages/...`) and retry; 2.0.0 fixed the factory auto-discovery clash. |
+| `sdk.languageModel is not a function` | A stale `kiro-acp-ai-provider` from before the 2.0.x line resolved from opencode's package cache. Remove the cached copy (`$XDG_CACHE_HOME/opencode/packages/kiro-acp-ai-provider`, default `~/.cache/opencode/packages/...`) and retry; the factory auto-discovery clash was fixed in the 2.0.x line, and this plugin currently pins 2.0.2. |
 | Path install rejected (`must export id`) | Run `npm run build` in your checkout first and reference the repo root (both entry modules export ids). |
 | Provider visible but runs fail | The provider is selectable (from the catalog) before any credential exists. Run `opencode auth login` first. |
 
@@ -246,4 +228,4 @@ npm test            # vitest
 
 ## License
 
-[MIT](./LICENSE)
+[MIT](./LICENSE) © Nacho F. Lizaur

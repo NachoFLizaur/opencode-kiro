@@ -123,7 +123,7 @@ const server = async (input: PluginInput): Promise<Hooks> => {
                 }
                 child.kill()
                 throw new Error(
-                  "Kiro authentication timed out. Run `kiro-cli auth login` manually.",
+                  "Kiro authentication timed out. Run `kiro-cli login` manually.",
                 )
               },
             }
