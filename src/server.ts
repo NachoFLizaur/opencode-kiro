@@ -131,6 +131,24 @@ const server = async (input: PluginInput): Promise<Hooks> => {
         },
       ],
     },
+    provider: {
+      id: "kiro",
+      // Inject per-model reasoning-effort variants, consumed as providerOptions.kiro.reasoningEffort.
+      async models(provider, _ctx) {
+        const { reasoningEffortsFor } = await import("kiro-acp-ai-provider")
+        for (const model of Object.values(provider.models)) {
+          // Guard the api.id deref: a malformed catalog entry must not fail provider registration.
+          const apiId = model.api?.id
+          if (!apiId) continue
+          const levels = reasoningEffortsFor(apiId)
+          if (levels.length === 0) continue // non-effort models: no variants
+          model.variants = Object.fromEntries(
+            levels.map((level) => [level, { reasoningEffort: level }]),
+          )
+        }
+        return provider.models
+      },
+    },
   }
 }
 

@@ -2,9 +2,10 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
-import type { AuthHook, PluginInput } from "@opencode-ai/plugin"
+import type { AuthHook, PluginInput, ProviderHook } from "@opencode-ai/plugin"
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest"
-import { verifyAuth } from "kiro-acp-ai-provider"
+import { reasoningEffortsFor, verifyAuth } from "kiro-acp-ai-provider"
+import type { KiroEffortLevel } from "kiro-acp-ai-provider"
 import serverPlugin, { notifyIfTokenExpired, readToken } from "../src/server"
 
 // Auth hook contract tests. The authorize() browser/poll flow isn't unit-tested
@@ -13,10 +14,13 @@ import serverPlugin, { notifyIfTokenExpired, readToken } from "../src/server"
 // The auth gate is kiro-cli whoami via the SDK's verifyAuth(); mock it so unit
 // tests drive logged-in / logged-out states without spawning kiro-cli or needing
 // the SDK build. readToken/notifyIfTokenExpired consume the boolean only.
+// reasoningEffortsFor is mocked too so the provider.models hook gets deterministic levels.
 vi.mock("kiro-acp-ai-provider", () => ({
   verifyAuth: vi.fn(() => ({ installed: true, authenticated: true })),
+  reasoningEffortsFor: vi.fn(() => []),
 }))
 const mockVerifyAuth = vi.mocked(verifyAuth)
+const mockReasoningEffortsFor = vi.mocked(reasoningEffortsFor)
 
 // Default to logged-in for every test (the common case: kiro-cli auto-re-auths);
 // individual tests override to authenticated:false to exercise the failed/nudge
@@ -24,6 +28,9 @@ const mockVerifyAuth = vi.mocked(verifyAuth)
 beforeEach(() => {
   mockVerifyAuth.mockReset()
   mockVerifyAuth.mockReturnValue({ installed: true, authenticated: true })
+  // Default to no-effort (empty levels); the provider-hook tests override per model.
+  mockReasoningEffortsFor.mockReset()
+  mockReasoningEffortsFor.mockReturnValue([])
 })
 
 // Isolate XDG_CONFIG_HOME for the whole file so server()'s tui.json probe never
@@ -79,8 +86,8 @@ describe("server hooks", () => {
   test("auth hook contract", async () => {
     const hooks = await serverPlugin.server(makeInput({ directory: "/tmp/proj", worktree: "/tmp/wt" }))
 
-    // Auth-only: exactly `auth`, no config or provider hook.
-    expect(Object.keys(hooks).sort()).toEqual(["auth"])
+    // Surfaces exactly the auth + provider hooks (no config/tool/etc).
+    expect(Object.keys(hooks).sort()).toEqual(["auth", "provider"])
     expect(hooks.auth?.provider).toBe("kiro")
     expect(hooks.auth?.methods).toHaveLength(1)
     const method = hooks.auth?.methods[0]
@@ -130,6 +137,72 @@ describe("server hooks", () => {
     const options = await hooks.auth?.loader?.(neverAuth, fakeProvider)
 
     expect(options?.cwd).toBe("/tmp/wt")
+  })
+})
+
+// The provider.models hook injects per-model reasoning-effort variants (cycle thinking effort).
+describe("provider hook (reasoning effort variants)", () => {
+  type ModelsFn = NonNullable<ProviderHook["models"]>
+
+  /** Minimal catalog provider for the models() hook: it only reads api.id. */
+  const modelsProvider = (...ids: string[]): Parameters<ModelsFn>[0] =>
+    ({
+      models: Object.fromEntries(ids.map((id) => [id, { api: { id } }])),
+    }) as unknown as Parameters<ModelsFn>[0]
+
+  /** Run the provider.models hook against a fresh fake catalog of the given ids. */
+  const runModels = async (...ids: string[]) => {
+    const hooks = await serverPlugin.server(makeInput({ directory: "/tmp/proj" }))
+    return hooks.provider?.models?.(modelsProvider(...ids), {})
+  }
+
+  test("builds variants for an effort-capable model keyed by its native levels", async () => {
+    // claude-opus-4.8 exposes the full native effort ladder.
+    const levels: KiroEffortLevel[] = ["low", "medium", "high", "xhigh", "max"]
+    mockReasoningEffortsFor.mockReturnValue(levels)
+
+    const models = await runModels("claude-opus-4.8")
+
+    expect(models?.["claude-opus-4.8"]?.variants).toEqual({
+      low: { reasoningEffort: "low" },
+      medium: { reasoningEffort: "medium" },
+      high: { reasoningEffort: "high" },
+      xhigh: { reasoningEffort: "xhigh" },
+      max: { reasoningEffort: "max" },
+    })
+  })
+
+  test("uses the model's reduced native set (no xhigh) verbatim, with no remap", async () => {
+    // claude-opus-4.6 supports every native level except xhigh.
+    const levels: KiroEffortLevel[] = ["low", "medium", "high", "max"]
+    mockReasoningEffortsFor.mockReturnValue(levels)
+
+    const models = await runModels("claude-opus-4.6")
+    const variants = models?.["claude-opus-4.6"]?.variants
+
+    expect(Object.keys(variants ?? {})).toEqual(levels)
+    expect("xhigh" in (variants ?? {})).toBe(false)
+    expect(variants?.high).toEqual({ reasoningEffort: "high" })
+  })
+
+  test("leaves a non-effort model without a variants key", async () => {
+    // claude-sonnet-4.5 has no effort control: reasoningEffortsFor returns [].
+    mockReasoningEffortsFor.mockReturnValue([])
+
+    const models = await runModels("claude-sonnet-4.5")
+    const model = models?.["claude-sonnet-4.5"]
+
+    expect(model?.variants).toBeUndefined()
+    expect("variants" in (model ?? {})).toBe(false)
+  })
+
+  test("exposes a provider hook with id kiro alongside the unchanged auth hook", async () => {
+    const hooks = await serverPlugin.server(makeInput({ directory: "/tmp/proj" }))
+
+    // The provider hook is additive: it coexists with the (unchanged) auth hook.
+    expect(hooks.provider?.id).toBe("kiro")
+    expect(typeof hooks.provider?.models).toBe("function")
+    expect(hooks.auth?.provider).toBe("kiro")
   })
 })
 

@@ -135,6 +135,22 @@ opencode run -m kiro/auto "hello"
 Image input is capability-driven: paste an image path into the TUI prompt and
 image-capable models receive it as an attachment.
 
+### Reasoning effort
+
+Effort-capable models expose a reasoning-effort toggle: cycle it in opencode with the
+**Cycle model variants** action (default keybind `ctrl+t`). It is **per model**, showing
+each family's native levels:
+
+- `claude-opus-4.8`, `claude-opus-4.7`: low / medium / high / xhigh / max
+- `claude-opus-4.6`, `claude-sonnet-4.6`: low / medium / high / max
+
+Models without effort control (opus-4.5, sonnet-4.5, haiku, deepseek, glm, qwen, minimax)
+show no effort option. opencode's **Default** (unset) returns the model to its native
+default effort. No config is required: the plugin's `provider.models` hook supplies the
+variants automatically and the chosen level flows to the SDK as
+`providerOptions.kiro.reasoningEffort`. Kiro cannot disable thinking, so even the lowest
+level still produces a reasoning trail.
+
 ## Credits in the sidebar
 
 Kiro is subscription-metered: requests consume **credits**, and the dollar cost
