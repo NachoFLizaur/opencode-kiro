@@ -53,8 +53,8 @@ const server = async (input: PluginInput): Promise<Hooks> => {
         trustAllTools: true,
         mcpTimeout: 45,
         contextWindows: Object.fromEntries(
-          Object.values(provider.models)
-            .filter((m) => (m.limit?.context ?? 0) > 0)
+          Object.values(provider?.models ?? {})
+            .filter((m) => m.api?.id && (m.limit?.context ?? 0) > 0)
             .map((m) => [m.api.id, m.limit.context]),
         ),
       }),
@@ -130,6 +130,14 @@ const server = async (input: PluginInput): Promise<Hooks> => {
           },
         },
       ],
+    },
+    // Ensure a kiro provider entry exists so a stored login plus a kiro-less
+    // catalog cannot crash opencode (core derefs an undefined provider during
+    // auth init). Mutates in place; the ??= keeps it idempotent and never
+    // clobbers a real models.dev kiro entry when one is present.
+    config: async (input) => {
+      input.provider ??= {}
+      input.provider.kiro ??= {}
     },
     provider: {
       id: "kiro",

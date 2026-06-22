@@ -2,7 +2,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
-import type { AuthHook, PluginInput, ProviderHook } from "@opencode-ai/plugin"
+import type { AuthHook, Config, PluginInput, ProviderHook } from "@opencode-ai/plugin"
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest"
 import { reasoningEffortsFor, verifyAuth } from "kiro-acp-ai-provider"
 import type { KiroEffortLevel } from "kiro-acp-ai-provider"
@@ -86,8 +86,8 @@ describe("server hooks", () => {
   test("auth hook contract", async () => {
     const hooks = await serverPlugin.server(makeInput({ directory: "/tmp/proj", worktree: "/tmp/wt" }))
 
-    // Surfaces exactly the auth + provider hooks (no config/tool/etc).
-    expect(Object.keys(hooks).sort()).toEqual(["auth", "provider"])
+    // Surfaces exactly the auth, config, and provider hooks (no tool/event/etc).
+    expect(Object.keys(hooks).sort()).toEqual(["auth", "config", "provider"])
     expect(hooks.auth?.provider).toBe("kiro")
     expect(hooks.auth?.methods).toHaveLength(1)
     const method = hooks.auth?.methods[0]
@@ -137,6 +137,68 @@ describe("server hooks", () => {
     const options = await hooks.auth?.loader?.(neverAuth, fakeProvider)
 
     expect(options?.cwd).toBe("/tmp/wt")
+  })
+
+  test("auth loader tolerates empty/undefined models and malformed entries (no throw)", async () => {
+    const hooks = await serverPlugin.server(makeInput({ directory: "/tmp/proj" }))
+
+    // An undefined provider and an empty models map both yield no windows.
+    await expect(
+      hooks.auth?.loader?.(neverAuth, undefined as unknown as Parameters<LoaderFn>[1]),
+    ).resolves.toMatchObject({ contextWindows: {} })
+    await expect(
+      hooks.auth?.loader?.(neverAuth, { models: {} } as unknown as Parameters<LoaderFn>[1]),
+    ).resolves.toMatchObject({ contextWindows: {} })
+
+    // A malformed entry (no api.id) is filtered out; the well-formed one survives.
+    const mixed = {
+      models: {
+        good: { api: { id: "good" }, limit: { context: 123 } },
+        "no-api": { limit: { context: 999 } },
+      },
+    } as unknown as Parameters<LoaderFn>[1]
+    const options = await hooks.auth?.loader?.(neverAuth, mixed)
+    expect((options as { contextWindows: Record<string, number> }).contextWindows).toEqual({
+      good: 123,
+    })
+  })
+})
+
+// The config hook stubs a kiro provider entry so a stored login plus a kiro-less
+// models.dev catalog cannot crash opencode (core derefs an undefined provider).
+describe("config hook (kiro provider stub)", () => {
+  /** Run the config hook against the given config, mutating it in place. */
+  const runConfig = async (input: Config): Promise<void> => {
+    const hooks = await serverPlugin.server(makeInput({ directory: "/tmp/proj" }))
+    await hooks.config?.(input)
+  }
+
+  test("creates provider and stubs kiro when provider is undefined", async () => {
+    const input: Config = {}
+
+    await runConfig(input)
+
+    expect(input.provider).toEqual({ kiro: {} })
+  })
+
+  test("adds an empty kiro stub without touching other providers", async () => {
+    const input: Config = { provider: { openai: { name: "OpenAI" } } }
+
+    await runConfig(input)
+
+    expect(input.provider?.kiro).toEqual({})
+    expect(input.provider?.openai).toEqual({ name: "OpenAI" })
+  })
+
+  test("does NOT clobber an existing kiro entry (idempotent / catalog-safe)", async () => {
+    const existing = { name: "Kiro", models: { foo: { name: "Foo" } } }
+    const input: Config = { provider: { kiro: existing } }
+
+    await runConfig(input)
+
+    // Same reference, fields untouched: a real models.dev kiro entry survives.
+    expect(input.provider?.kiro).toBe(existing)
+    expect(input.provider?.kiro).toEqual({ name: "Kiro", models: { foo: { name: "Foo" } } })
   })
 })
 
