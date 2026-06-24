@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
@@ -6,7 +6,7 @@ import type { AuthHook, Config, PluginInput, ProviderHook } from "@opencode-ai/p
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest"
 import { reasoningEffortsFor, verifyAuth } from "kiro-acp-ai-provider"
 import type { KiroEffortLevel } from "kiro-acp-ai-provider"
-import serverPlugin, { notifyIfTokenExpired, readToken } from "../src/server"
+import serverPlugin, { enableSidebarConfig, notifyIfTokenExpired, readToken } from "../src/server"
 
 // Auth hook contract tests. The authorize() browser/poll flow isn't unit-tested
 // (it spawns kiro-cli); we assert only the method shape and the loader return.
@@ -288,16 +288,28 @@ describe("sidebar consent prompt (tui.json probe)", () => {
     ])
   })
 
-  test("omits the prompt when tui.json already has the sidebar configured", async () => {
-    // Seed an already-configured tui.json: opencode-kiro in `plugin` AND the
-    // builtin sidebar disabled -> "don't ask twice" -> empty prompts.
+  test("omits the prompt when opencode-kiro is already in the plugin array", async () => {
+    // Append model: configured = opencode-kiro present in `plugin` -> "don't ask
+    // twice" -> empty prompts (covers re-auth).
+    mkdirSync(dirname(tuiJsonPath()), { recursive: true })
+    writeFileSync(tuiJsonPath(), JSON.stringify({ theme: "kanagawa", plugin: ["opencode-kiro"] }))
+
+    const hooks = await serverPlugin.server(makeInput({ directory: "/tmp/proj" }))
+
+    expect(hooks.auth?.methods[0]?.prompts).toEqual([])
+    expect(sidebarPrompt(hooks.auth)).toBeUndefined()
+  })
+
+  test("omits the prompt based SOLELY on plugin, ignoring an unrelated plugin_enabled", async () => {
+    // "Configured" depends only on opencode-kiro being in `plugin`; the plugin no
+    // longer manages plugin_enabled, so an unrelated toggle never re-triggers the
+    // consent prompt.
     mkdirSync(dirname(tuiJsonPath()), { recursive: true })
     writeFileSync(
       tuiJsonPath(),
       JSON.stringify({
-        theme: "kanagawa",
         plugin: ["opencode-kiro"],
-        plugin_enabled: { "internal:sidebar-context": false },
+        plugin_enabled: { "internal:other": true },
       }),
     )
 
@@ -306,15 +318,79 @@ describe("sidebar consent prompt (tui.json probe)", () => {
     expect(hooks.auth?.methods[0]?.prompts).toEqual([])
     expect(sidebarPrompt(hooks.auth)).toBeUndefined()
   })
+})
 
-  test("still offers the prompt when only partially configured", async () => {
-    // Plugin listed but builtin sidebar NOT disabled -> not fully configured.
+describe("enableSidebarConfig writer (tui.json)", () => {
+  // Each case drives the isolated tui.json the writer reads/writes.
+  afterEach(() => rmSync(join(xdgDir, "opencode"), { recursive: true, force: true }))
+
+  const readTui = (): Record<string, unknown> =>
+    JSON.parse(readFileSync(tuiJsonPath(), "utf8")) as Record<string, unknown>
+
+  test("adds opencode-kiro to plugin and writes NO plugin_enabled disable", async () => {
+    // No file yet: the writer creates one carrying just the plugin entry.
+    await enableSidebarConfig(tuiJsonPath(), makeInput({ directory: "/tmp/proj" }))
+
+    const config = readTui()
+    expect(config.plugin).toEqual(["opencode-kiro"])
+    // The append model never disables the builtin context box.
+    expect("plugin_enabled" in config).toBe(false)
+  })
+
+  test("appends opencode-kiro to an existing plugin array and preserves other keys", async () => {
+    // Not configured yet (opencode-kiro absent): the writer adds it without
+    // dropping the existing plugin or unrelated keys, and writes no disable.
+    mkdirSync(dirname(tuiJsonPath()), { recursive: true })
+    writeFileSync(tuiJsonPath(), JSON.stringify({ theme: "kanagawa", plugin: ["other-plugin"] }))
+
+    await enableSidebarConfig(tuiJsonPath(), makeInput({ directory: "/tmp/proj" }))
+
+    const config = readTui()
+    expect(config.plugin).toEqual(["other-plugin", "opencode-kiro"])
+    expect(config.theme).toBe("kanagawa")
+    expect("plugin_enabled" in config).toBe(false)
+  })
+
+  test("is idempotent: an already-configured file is left untouched (no duplicate plugin)", async () => {
     mkdirSync(dirname(tuiJsonPath()), { recursive: true })
     writeFileSync(tuiJsonPath(), JSON.stringify({ plugin: ["opencode-kiro"] }))
 
-    const hooks = await serverPlugin.server(makeInput({ directory: "/tmp/proj" }))
+    await enableSidebarConfig(tuiJsonPath(), makeInput({ directory: "/tmp/proj" }))
 
-    expect(sidebarPrompt(hooks.auth)?.type).toBe("select")
+    const config = readTui()
+    expect(config.plugin).toEqual(["opencode-kiro"])
+    expect("plugin_enabled" in config).toBe(false)
+  })
+
+  test("leaves an existing unrelated plugin_enabled exactly as-is", async () => {
+    // The plugin no longer manages plugin_enabled: a pre-existing entry (set by
+    // the user for unrelated reasons) is preserved untouched while opencode-kiro
+    // is added to `plugin`.
+    mkdirSync(dirname(tuiJsonPath()), { recursive: true })
+    writeFileSync(
+      tuiJsonPath(),
+      JSON.stringify({
+        plugin: ["other-plugin"],
+        plugin_enabled: { "internal:other": true },
+      }),
+    )
+
+    await enableSidebarConfig(tuiJsonPath(), makeInput({ directory: "/tmp/proj" }))
+
+    const config = readTui()
+    expect(config.plugin).toEqual(["other-plugin", "opencode-kiro"])
+    // The unrelated toggle is left exactly as written; nothing is deleted.
+    expect(config.plugin_enabled).toEqual({ "internal:other": true })
+  })
+
+  test("does not clobber an existing but unparseable tui.json", async () => {
+    mkdirSync(dirname(tuiJsonPath()), { recursive: true })
+    writeFileSync(tuiJsonPath(), "{ not valid json")
+
+    await enableSidebarConfig(tuiJsonPath(), makeInput({ directory: "/tmp/proj" }))
+
+    // A parse failure must never overwrite the user's file.
+    expect(readFileSync(tuiJsonPath(), "utf8")).toBe("{ not valid json")
   })
 })
 

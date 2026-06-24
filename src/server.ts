@@ -2,10 +2,10 @@ import type { Hooks, Plugin, PluginInput } from "@opencode-ai/plugin"
 import { homedir } from "node:os"
 import { dirname, join } from "node:path"
 
-// The plugin name as it appears in the user's tui.json `plugin` array, and the
-// builtin TUI sidebar we replace by disabling it in `plugin_enabled`.
+// The plugin name as it appears in the user's tui.json `plugin` array. The
+// append model only ensures this entry is present; it never writes or reads
+// `plugin_enabled`.
 const KIRO_PLUGIN_NAME = "opencode-kiro"
-const SIDEBAR_PLUGIN_ID = "internal:sidebar-context"
 
 // Auth-only server plugin: the kiro provider/model catalog lives on models.dev,
 // so this only supplies the `auth` hook. Must never export `tui` (the loader
@@ -274,25 +274,22 @@ async function readTuiConfig(path: string): Promise<Record<string, unknown> | un
   }
 }
 
-// "Already configured" = opencode-kiro is in `plugin` AND the builtin sidebar is
-// disabled via plugin_enabled (so the kiro credits sidebar replaces it).
+// "Already configured" = opencode-kiro is present in the `plugin` array. That
+// single entry is all the credits box needs; the plugin never writes or reads
+// `plugin_enabled`, so nothing else affects this check.
 function isSidebarConfigured(config: Record<string, unknown> | undefined): boolean {
   if (!config) return false
   const plugin = config.plugin
-  const enabled = config.plugin_enabled
-  const hasPlugin = Array.isArray(plugin) && plugin.includes(KIRO_PLUGIN_NAME)
-  const sidebarOff =
-    typeof enabled === "object" &&
-    enabled !== null &&
-    (enabled as Record<string, unknown>)[SIDEBAR_PLUGIN_ID] === false
-  return hasPlugin && sidebarOff
+  return Array.isArray(plugin) && plugin.includes(KIRO_PLUGIN_NAME)
 }
 
-// Idempotently merge the credits-sidebar config into the global tui.json after a
-// successful login. Defensive + non-destructive: starts from {} when the file is
-// missing, bails (no write) when it exists but is unparseable, preserves all
-// other keys, and NEVER throws: a config-write failure must not fail auth.
-async function enableSidebarConfig(path: string, input: PluginInput): Promise<void> {
+// Idempotently ensure opencode-kiro is in the global tui.json `plugin` array
+// after a successful login. Append model: it ONLY adds the plugin entry; it never
+// writes, reads, or deletes `plugin_enabled`. Defensive + non-destructive: starts
+// from {} when the file is missing, bails (no write) when it exists but is
+// unparseable, preserves all other keys (including any unrelated plugin_enabled),
+// and NEVER throws: a config-write failure must not fail auth. Exported for tests.
+export async function enableSidebarConfig(path: string, input: PluginInput): Promise<void> {
   try {
     const { readFile, writeFile, mkdir } = await import("node:fs/promises")
 
@@ -319,23 +316,13 @@ async function enableSidebarConfig(path: string, input: PluginInput): Promise<vo
       }
     }
 
-    // Idempotent: already wired up, nothing to do.
+    // Idempotent: already wired up (plugin present), nothing to do.
     if (isSidebarConfigured(config)) return
 
     // Ensure opencode-kiro is in `plugin` (create + dedup); preserve any others.
     const plugin = Array.isArray(config.plugin) ? [...(config.plugin as unknown[])] : []
     if (!plugin.includes(KIRO_PLUGIN_NAME)) plugin.push(KIRO_PLUGIN_NAME)
     config.plugin = plugin
-
-    // Disable the builtin sidebar; preserve any other plugin_enabled entries.
-    const enabled =
-      typeof config.plugin_enabled === "object" &&
-      config.plugin_enabled !== null &&
-      !Array.isArray(config.plugin_enabled)
-        ? (config.plugin_enabled as Record<string, unknown>)
-        : {}
-    enabled[SIDEBAR_PLUGIN_ID] = false
-    config.plugin_enabled = enabled
 
     await mkdir(dirname(path), { recursive: true })
     await writeFile(path, JSON.stringify(config, null, 2) + "\n", "utf8")

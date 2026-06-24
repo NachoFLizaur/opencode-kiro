@@ -8,8 +8,8 @@ opencode learns the `kiro` provider and its available models (US region) from th
 - **Auth** via the official `kiro-cli` login flow (`opencode auth login`, then "Kiro CLI Login")
 - **Provider options loader**: the `cwd`, `agent`, `trustAllTools`, `mcpTimeout` values
   opencode forwards into the SDK factory
-- **TUI credits display**: an opt-in sidebar context box showing tokens, context usage,
-  and Kiro credits
+- **TUI credits display**: an opt-in Kiro credits box in the sidebar (appended below the
+  native Context box) plus a matching footer credits chip
 
 The `kiro` provider resolves to [`kiro-acp-ai-provider`](https://www.npmjs.com/package/kiro-acp-ai-provider),
 an AI-SDK provider that talks to your locally installed `kiro-cli` over Kiro's
@@ -38,13 +38,13 @@ The installer reads this package's `exports` and detects both plugin entrypoints
 (`./server` and `./tui`), then patches **both** config files automatically:
 
 - `.opencode/opencode.json`: the server plugin (auth)
-- `.opencode/tui.json`: the TUI plugin (credits sidebar box)
+- `.opencode/tui.json`: the TUI plugin (credits sidebar box + footer chip)
 
 (with `--global`: `~/.config/opencode/opencode.json` and `~/.config/opencode/tui.json`)
 
 You do **not** add a `provider.kiro` block; opencode loads the `kiro` provider and its
-models straight from the models.dev catalog. Then disable the builtin context box, see
-[Credits in the sidebar](#credits-in-the-sidebar).
+models straight from the models.dev catalog. See
+[Credits in the sidebar](#credits-in-the-sidebar) for what the TUI plugin adds.
 
 ### Manual alternative
 
@@ -64,12 +64,12 @@ project's `.opencode/` directory, at the project root, or in the global
 
 ```json
 {
-  "plugin": ["opencode-kiro"],
-  "plugin_enabled": { "internal:sidebar-context": false }
+  "plugin": ["opencode-kiro"]
 }
 ```
 
-(`plugin_enabled` is the [credits sidebar](#credits-in-the-sidebar) step, recommended now, explained below.)
+That single `plugin` entry is all the [credits sidebar](#credits-in-the-sidebar) box and
+footer chip need; there is no `plugin_enabled` step.
 
 ### Local development (path source)
 
@@ -87,8 +87,8 @@ npm install && npm run build
 
 opencode resolves the right entrypoint per file from the package `exports`. Note that
 path-sourced TUI plugins **must export an `id`** (opencode rejects them otherwise);
-this package ships `{ id: "opencode-kiro", tui }`, so the id (and your
-`plugin_enabled` keys) are identical across path and npm installs.
+this package ships `{ id: "opencode-kiro", tui }`, so the id is identical across path
+and npm installs.
 
 Because the provider now comes from the catalog rather than the plugin, a local checkout
 also needs a catalog that includes `kiro`. opencode reads its catalog from
@@ -154,19 +154,30 @@ level still produces a reasoning trail.
 ## Credits in the sidebar
 
 Kiro is subscription-metered: requests consume **credits**, and the dollar cost
-opencode normally displays for Kiro turns is always $0.00. The plugin therefore
-registers a **full replacement** for the built-in sidebar context box, showing
-tokens, context percentage, and a spend line.
+opencode normally displays for Kiro turns is always $0.00. To surface credits the
+plugin **appends** a small Kiro credits box in the sidebar, rendered right below the
+native **Context** box. It does **not** replace or disable any builtin section: the
+native Context box stays and keeps showing the usual tokens, context percentage, and
+cost.
 
-The spend line adapts to what the session actually used:
+The credits box renders only for Kiro sessions; for a non-Kiro session it shows nothing,
+so that session's sidebar is unchanged. The credits value and its unit come from the
+metadata the SDK attaches to each message part (kiro-cli reports the unit); nothing is
+hardcoded client-side.
 
-- **Dollars only** (no Kiro turns): the builtin's exact `$X.XX spent` line, so
-  non-Kiro sessions look identical to the built-in box.
-- **Credits only** (Kiro turns, no dollar cost): a single `N credits` line.
-- **Both** (the session used a dollar-based model AND Kiro in one session): two
-  stacked lines, `$X.XX spent` then `N credits`, so neither figure is hidden.
+All you need in `tui.json` is the plugin entry:
 
-Disable the builtin box in `tui.json` so only the replacement renders:
+```json
+{
+  "plugin": ["opencode-kiro"]
+}
+```
+
+There is no `plugin_enabled` step anymore.
+
+### Migrating from 0.2.1 and earlier
+
+Older versions replaced the native Context box with a clone and disabled the builtin via:
 
 ```json
 {
@@ -174,19 +185,14 @@ Disable the builtin box in `tui.json` so only the replacement renders:
 }
 ```
 
-Without this you will see **two** context boxes (cosmetic duplication: the builtin
-one plus the plugin's). The credits value and its unit come from the metadata the SDK
-attaches to each message part (kiro-cli reports the unit); nothing is hardcoded client-side.
-
-Trade-off: the replacement box applies to **every** session and disabling the builtin
-is global. The replacement reproduces the builtin `$X.XX spent` line for non-Kiro
-sessions (and stacks it above credits when a session used both), so mixed-provider
-users keep dollar cost in the sidebar; if you prefer the original built-in box, leave
-it enabled at the cost of the duplicate box.
+If you upgraded from 0.2.1 or earlier and still have that line in your `tui.json`,
+remove it yourself: the plugin no longer manages `plugin_enabled`. Once the line is
+gone the native Context box returns and shows the usual tokens / context % / cost, and
+the Kiro credits box appears in a separate box right below it.
 
 ## Known limitation
 
-**Credits render in the TUI only.** Two TUI surfaces show them: the sidebar context
+**Credits render in the TUI only.** Two TUI surfaces show them: the sidebar credits
 box (above) and the input/prompt meta row chip (`session_prompt_right`), which sits
 above the host's `$` cost chip. Every other cost surface (ACP clients, the web app,
 desktop, web share pages, and CLI cost output) shows $0.00 for Kiro sessions. The
@@ -225,9 +231,8 @@ would require opencode core changes and is intentionally out of scope for this p
 |---|---|
 | `kiro-cli is not installed` during auth | Install kiro-cli from <https://kiro.dev/docs/cli/> and ensure it is on `PATH` for the opencode process. |
 | Auth times out after ~120s | Complete the browser login faster, or run `kiro-cli login` yourself, then re-run `opencode auth login` (fast path). |
-| Two "Context" boxes in the sidebar | Add `"plugin_enabled": { "internal:sidebar-context": false }` to `tui.json` (see [Credits in the sidebar](#credits-in-the-sidebar)). |
 | No credits line / credits stay 0 | Credits appear after the first **completed** kiro turn; cancelled turns and turns without usage metadata contribute nothing. Check the TUI plugin is `active` in the Plugins dialog (and listed in `tui.json`). |
-| Credits sidebar box never appears (even with `tui.json` configured correctly) | The TUI credits box renders only when `opencode-kiro` is resolvable in opencode's package cache. If the package is missing from the cache the box silently does not appear. Fix: ensure `opencode-kiro` is installed so it resolves in the cache. Do **not** manually clear the package cache: clearing can trigger a flaky on-demand refetch that fails with an "unknown git error". |
+| Credits box never appears (even with `tui.json` configured correctly) | The TUI credits box renders only when `opencode-kiro` is resolvable in opencode's package cache. If the package is missing from the cache the box silently does not appear. Fix: ensure `opencode-kiro` is installed so it resolves in the cache. Do **not** manually clear the package cache: clearing can trigger a flaky on-demand refetch that fails with an "unknown git error". |
 | `kiro` provider not showing in `opencode models` | The provider comes from the models.dev catalog, not this plugin. Ensure your opencode version ships a catalog that includes `kiro` (run `opencode models --refresh` to update the cache). For local development, point opencode at a kiro-inclusive catalog via `OPENCODE_MODELS_PATH=/path/to/api.json` (see [Local development](#local-development-path-source)). |
 | `sdk.languageModel is not a function` | A stale `kiro-acp-ai-provider` from before the 2.0.x line resolved from opencode's package cache. Remove the cached copy (`$XDG_CACHE_HOME/opencode/packages/kiro-acp-ai-provider`, default `~/.cache/opencode/packages/...`) and retry; the factory auto-discovery clash was fixed in the 2.0.x line, and this plugin currently pins 2.0.2. |
 | Path install rejected (`must export id`) | Run `npm run build` in your checkout first and reference the repo root (both entry modules export ids). |

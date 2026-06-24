@@ -101,7 +101,7 @@ export function formatCredits(value: number, unit?: string): string {
 }
 
 // Mirrors the builtin sidebar's currency formatter (context.tsx): USD style.
-// Co-located here (not in context-view) so the cost lines are a pure, Solid-free
+// Co-located here (kept out of the view) so the cost lines are a pure, Solid-free
 // function that unit-tests under plain Node.
 const money = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" })
 
