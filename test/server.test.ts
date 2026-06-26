@@ -256,11 +256,33 @@ describe("provider hook (reasoning effort variants)", () => {
       models: Object.fromEntries(ids.map((id) => [id, { api: { id } }])),
     }) as unknown as Parameters<ModelsFn>[0]
 
-  /** Run the provider.models hook against a fresh fake catalog of the given ids. */
+  /** A present kiro credential for the hook's ctx.auth (shape irrelevant; only presence is gated). */
+  const authedCtx = { auth: { type: "oauth" } } as unknown as Parameters<ModelsFn>[1]
+
+  /** Run the provider.models hook against a fresh fake catalog of the given ids (authed by default). */
   const runModels = async (...ids: string[]) => {
     const hooks = await serverPlugin.server(makeInput({ directory: "/tmp/proj" }))
-    return hooks.provider?.models?.(modelsProvider(...ids), {})
+    return hooks.provider?.models?.(modelsProvider(...ids), authedCtx)
   }
+
+  test("UNAUTHED (ctx.auth undefined): returns provider.models unchanged, never loads the SDK or adds variants", async () => {
+    // The early return precedes the SDK import: an unauthed user gets the catalog
+    // back untouched (no variants), proving reasoningEffortsFor is never reached.
+    // claude-opus-4.8 would otherwise get a full variant ladder.
+    mockReasoningEffortsFor.mockReturnValue(["low", "medium", "high", "xhigh", "max"])
+    const hooks = await serverPlugin.server(makeInput({ directory: "/tmp/proj" }))
+    const provider = modelsProvider("claude-opus-4.8", "claude-sonnet-4.5")
+
+    // No auth in ctx: the gate returns the same models object, variant-free.
+    const models = await hooks.provider?.models?.(provider, {})
+
+    expect(models).toBe(provider.models)
+    expect(models?.["claude-opus-4.8"]?.variants).toBeUndefined()
+    expect(models?.["claude-sonnet-4.5"]?.variants).toBeUndefined()
+    expect("variants" in (models?.["claude-opus-4.8"] ?? {})).toBe(false)
+    // The SDK's effort lookup is never consulted pre-auth (gate precedes the import).
+    expect(mockReasoningEffortsFor).not.toHaveBeenCalled()
+  })
 
   test("builds variants for an effort-capable model keyed by its native levels", async () => {
     // claude-opus-4.8 exposes the full native effort ladder.

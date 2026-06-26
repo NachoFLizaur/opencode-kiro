@@ -121,7 +121,9 @@ const server = async (input: PluginInput): Promise<Hooks> => {
     provider: {
       id: "kiro",
       // inject per-model reasoning-effort variants (consumed as providerOptions.kiro.reasoningEffort)
-      async models(provider, _ctx) {
+      async models(provider, ctx) {
+        // auth-gate: don't load the SDK or inject variants until the user is authed with kiro
+        if (!ctx.auth) return provider.models
         const { reasoningEffortsFor } = await import("kiro-acp-ai-provider")
         for (const model of Object.values(provider.models)) {
           // guard the api.id deref: a malformed catalog entry must not fail registration
