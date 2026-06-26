@@ -56,10 +56,8 @@ const server = async (input: PluginInput): Promise<Hooks> => {
                 "kiro-cli is not installed. Install it from https://kiro.dev/docs/cli/",
               )
 
-            // wire up the sidebar only on opt-in, after a successful login. enableSidebarConfig is idempotent so no guard needed; tui.json write happens only here.
-            const onSuccess = async () => {
-              if (inputs?.sidebar === "yes") await enableSidebarConfig(tuiConfigPath(), input)
-            }
+            // consent, not auth success, is the trigger: wire the sidebar the instant the user opts in, before any auth branching or the 120s poll. enableSidebarConfig is idempotent.
+            if (inputs?.sidebar === "yes") await enableSidebarConfig(tuiConfigPath(), input)
 
             // already authed: skip the login flow
             if (status.authenticated) {
@@ -68,9 +66,7 @@ const server = async (input: PluginInput): Promise<Hooks> => {
                 instructions: "",
                 method: "auto" as const,
                 async callback() {
-                  const result = await readToken(status.tokenPath)
-                  if (result.type === "success") await onSuccess()
-                  return result
+                  return readToken(status.tokenPath)
                 },
               }
             }
@@ -96,9 +92,7 @@ const server = async (input: PluginInput): Promise<Hooks> => {
                   const check = verifyAuth()
                   if (check.authenticated) {
                     child.kill()
-                    const result = await readToken(check.tokenPath)
-                    if (result.type === "success") await onSuccess()
-                    return result
+                    return readToken(check.tokenPath)
                   }
                 }
                 child.kill()
@@ -291,8 +285,9 @@ export async function enableSidebarConfig(path: string, input: PluginInput): Pro
     } catch {
       // no TUI / toast unavailable: ignore
     }
-  } catch {
-    // never let a config-write error break a successful auth
+  } catch (err) {
+    // log but don't rethrow: a config-write error must not break a successful auth
+    console.error("opencode-kiro: failed to enable the Kiro credits sidebar in tui.json:", err)
   }
 }
 

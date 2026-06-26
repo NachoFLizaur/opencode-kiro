@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
@@ -21,6 +21,12 @@ vi.mock("kiro-acp-ai-provider", () => ({
 }))
 const mockVerifyAuth = vi.mocked(verifyAuth)
 const mockReasoningEffortsFor = vi.mocked(reasoningEffortsFor)
+
+// authorize()'s not-authed branch spawns `kiro-cli login`; stub child_process so
+// the consent-write tests exercise the poll branch without launching a real binary.
+vi.mock("node:child_process", () => ({
+  execFile: vi.fn(() => ({ kill: vi.fn() })),
+}))
 
 // Default to logged-in for every test (the common case: kiro-cli auto-re-auths);
 // individual tests override to authenticated:false to exercise the failed/nudge
@@ -443,6 +449,40 @@ describe("enableSidebarConfig writer (tui.json)", () => {
 
     // A parse failure must never overwrite the user's file.
     expect(readFileSync(tuiJsonPath(), "utf8")).toBe("{ not valid json")
+  })
+})
+
+// Regression: the bug was that tui.json often was NOT written on the FIRST
+// /connect. The sidebar write used to live in onSuccess(), reached only after a
+// successful login; on a first connect the not-authed poll branch could time out
+// before writing. The fix moves the write to fire on CONSENT, the instant
+// authorize() runs, independent of the auth branch and the 120s poll.
+describe("authorize sidebar consent write (decoupled from auth success)", () => {
+  afterEach(() => rmSync(join(xdgDir, "opencode"), { recursive: true, force: true }))
+
+  const authorizeWith = async (inputs: Record<string, string>) => {
+    const hooks = await serverPlugin.server(makeInput({ directory: "/tmp/proj" }))
+    return hooks.auth?.methods[0]?.authorize?.(inputs)
+  }
+
+  test("writes tui.json on consent=yes even when NOT authenticated (poll branch, login not done)", async () => {
+    // First-connect condition: installed but NOT logged in, so authorize takes
+    // the login+poll branch. The write must already be on disk regardless of the
+    // poll, proving it no longer depends on a successful login.
+    mockVerifyAuth.mockReturnValue({ installed: true, authenticated: false })
+
+    await authorizeWith({ sidebar: "yes" })
+
+    const config = JSON.parse(readFileSync(tuiJsonPath(), "utf8")) as Record<string, unknown>
+    expect(config.plugin).toEqual(["opencode-kiro"])
+  })
+
+  test("does NOT write tui.json when consent is not yes (no opt-in, not authenticated)", async () => {
+    mockVerifyAuth.mockReturnValue({ installed: true, authenticated: false })
+
+    await authorizeWith({ sidebar: "no" })
+
+    expect(existsSync(tuiJsonPath())).toBe(false)
   })
 })
 
