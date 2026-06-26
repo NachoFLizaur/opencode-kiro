@@ -1,10 +1,6 @@
-// Pure credit helpers for the sidebar context view (no opentui/solid imports,
-// so they unit-test under plain Node).
-//
-// Credits come from part.metadata?.kiro ({ credits, creditsUnit }), NOT
-// providerMetadata. Dedupe rule: count once per message; a message's text and
-// reasoning parts carry the same turn total (dual emission), so the last
-// carrier wins and parts are never summed. No `kiro` key means no credits.
+// pure credit helpers (no opentui/solid imports, so they test under plain Node).
+// credits come from part.metadata?.kiro ({ credits, creditsUnit }), not providerMetadata.
+// dedupe: count once per message; text and reasoning parts carry the same turn total (dual emission), so last-carrier-wins and parts are never summed.
 
 /** Any part-like object. `object` (not `{ metadata?: unknown }`) so metadata-less SDK Part variants stay assignable. */
 export type CreditPart = object
@@ -26,10 +22,8 @@ export interface SessionCredits {
   total: number
   unit?: string
   /**
-   * True once any assistant message carried kiro credit metadata. Lets the
-   * sidebar/footer pick the credits view over the builtin "$X spent" fallback,
-   * since a credits total of 0 (a real kiro turn) is indistinguishable from
-   * "no kiro metadata at all" by `total` alone.
+   * True once any assistant message carried kiro credit metadata. Lets the view pick credits over the
+   * "$X spent" fallback, since a 0-credit kiro turn is indistinguishable from no metadata by `total` alone.
    */
   present: boolean
 }
@@ -100,20 +94,15 @@ export function formatCredits(value: number, unit?: string): string {
   return `${amount} ${label}`
 }
 
-// Mirrors the builtin sidebar's currency formatter (context.tsx): USD style.
-// Co-located here (kept out of the view) so the cost lines are a pure, Solid-free
-// function that unit-tests under plain Node.
+// mirrors the builtin sidebar's USD formatter (context.tsx). co-located out of the view so cost lines stay pure and Solid-free for tests.
 const money = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" })
 
 /**
- * The sidebar's muted cost lines, returned as an ARRAY (one entry per rendered
- * muted row). Three display states:
- *   - BOTH (credits present AND a non-zero dollar cost): TWO stacked lines
- *     ["$X.XX spent", "N credits"]
- *   - credits only (credits present, dollar cost 0): ["N credits"] (Kiro-only)
+ * Muted cost lines as an array (one per rendered row). Three states:
+ *   - both (credits present + non-zero cost): ["$X.XX spent", "N credits"]
+ *   - credits only (cost 0): ["N credits"]
  *   - dollars only (no credits): ["$X.XX spent"] (also ["$0.00 spent"] when empty)
- * The matrix keys off `credits.present` (a real 0-credit Kiro turn is present)
- * and `cost > 0`, never off `credits.total` alone.
+ * Keys off `credits.present` and `cost > 0`, never `credits.total` alone (a 0-credit kiro turn is present).
  */
 export function spendLines(input: { cost: number; credits: SessionCredits }): string[] {
   const { cost, credits } = input

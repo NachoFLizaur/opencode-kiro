@@ -1,14 +1,9 @@
-// TUI plugin module. Appends a Kiro credits box below the native Context box;
-// it does not disable or replace any builtin sidebar section.
-//   - sidebar_content (order 150): a small CREDITS-ONLY box. Builtin sections
-//     render by order (context=100, mcp=200, ...), so 150 lands it right below
-//     the native Context box. Empty for non-kiro sessions.
-//   - session_prompt_right: a footer credits chip beside the host's cost/token
-//     chips, shown only for kiro sessions.
+// TUI plugin: appends a Kiro credits box below the native Context box, replaces nothing.
+//   - sidebar_content (order 150): credits-only box. builtin sections render by order (context=100, mcp=200), so 150 lands it below Context. empty for non-kiro.
+//   - session_prompt_right: footer credits chip beside the host's cost/token chips, kiro sessions only.
 import type { TuiPlugin } from "@opencode-ai/plugin/tui"
 
-// Lazy import: @opentui/core is Bun-native and only exists in the opencode TUI
-// host, so importing the views here keeps dist/tui.js loadable under plain Node.
+// lazy import: @opentui/core is Bun-native and only exists in the TUI host, so this keeps dist/tui.js loadable under plain Node
 const tui: TuiPlugin = async (api) => {
   const { createCreditsBoxView } = await import("./tui/credits-box-view.js")
   const { createCreditsChipView } = await import("./tui/credits-chip-view.js")
@@ -25,12 +20,10 @@ const tui: TuiPlugin = async (api) => {
   })
 }
 
-// `id` is required for path/file-source installs (opencode rejects file-source
-// plugins without one). Matching the package name keeps the id identical across
-// path and npm installs.
+// `id` is required for file-source installs (opencode rejects them without one); matching the package name keeps it identical across path and npm installs
 export default { id: "opencode-kiro", tui }
 
-// Pure helpers re-exported for unit tests; named exports don't affect the loader.
+// pure helpers re-exported for tests; named exports don't affect the loader
 export {
   creditsForMessage,
   formatCredits,

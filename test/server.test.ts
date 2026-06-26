@@ -33,27 +33,38 @@ beforeEach(() => {
   mockReasoningEffortsFor.mockReturnValue([])
 })
 
-// Isolate XDG_CONFIG_HOME for the whole file so server()'s tui.json probe never
-// reads (or the consent tests never write) the developer's real ~/.config.
+// Isolate XDG_CONFIG_HOME (tui.json) and XDG_DATA_HOME (auth.json) for the whole
+// file so neither the consent writer nor the config-hook credential probe ever
+// touches the developer's real ~/.config or ~/.local/share. The data dir starts
+// EMPTY, so hasStoredKiroCredential() defaults to false everywhere; the config
+// suite writes its own auth.json per case.
 let xdgDir: string
 let prevXdg: string | undefined
+let xdgDataDir: string
+let prevXdgData: string | undefined
 beforeAll(() => {
   prevXdg = process.env.XDG_CONFIG_HOME
   xdgDir = mkdtempSync(join(tmpdir(), "kiro-tui-test-"))
   process.env.XDG_CONFIG_HOME = xdgDir
+  prevXdgData = process.env.XDG_DATA_HOME
+  xdgDataDir = mkdtempSync(join(tmpdir(), "kiro-data-test-"))
+  process.env.XDG_DATA_HOME = xdgDataDir
 })
 afterAll(() => {
   if (prevXdg === undefined) delete process.env.XDG_CONFIG_HOME
   else process.env.XDG_CONFIG_HOME = prevXdg
   rmSync(xdgDir, { recursive: true, force: true })
+  if (prevXdgData === undefined) delete process.env.XDG_DATA_HOME
+  else process.env.XDG_DATA_HOME = prevXdgData
+  rmSync(xdgDataDir, { recursive: true, force: true })
 })
 
 const tuiJsonPath = () => join(xdgDir, "opencode", "tui.json")
 
 /**
- * Fake PluginInput. The server module reads directory/worktree and, at startup,
- * calls input.client.tui.showToast for the expiry nudge; stub it so server()
- * exercises the toast path (not the console.warn fallback) during these tests.
+ * Fake PluginInput. The server module reads directory/worktree; the auth loader
+ * fires the (fire-and-forget) login nudge via input.client.tui.showToast, so we
+ * stub showToast here. server() startup itself touches none of this.
  */
 const makeInput = (input: { directory?: string; worktree?: string }): PluginInput =>
   ({ ...input, client: { tui: { showToast: async () => true } } }) as unknown as PluginInput
@@ -166,14 +177,45 @@ describe("server hooks", () => {
 
 // The config hook stubs a kiro provider entry so a stored login plus a kiro-less
 // models.dev catalog cannot crash opencode (core derefs an undefined provider).
-describe("config hook (kiro provider stub)", () => {
+// It is GATED on a stored kiro credential: the crash only affects users WITH a
+// kiro login, so a non-kiro user must get no phantom provider mutation.
+describe("config hook (kiro provider stub, gated on a stored kiro credential)", () => {
+  // The gate reads $XDG_DATA_HOME/opencode/auth.json (isolated for the file).
+  // Each case writes the auth.json it needs and clears it afterward; with no
+  // auth.json present the gate is false and the hook must be a no-op.
+  const authJsonPath = () => join(xdgDataDir, "opencode", "auth.json")
+  const writeAuthJson = (body: unknown): void => {
+    mkdirSync(dirname(authJsonPath()), { recursive: true })
+    writeFileSync(authJsonPath(), JSON.stringify(body))
+  }
+  afterEach(() => rmSync(join(xdgDataDir, "opencode"), { recursive: true, force: true }))
+
   /** Run the config hook against the given config, mutating it in place. */
   const runConfig = async (input: Config): Promise<void> => {
     const hooks = await serverPlugin.server(makeInput({ directory: "/tmp/proj" }))
     await hooks.config?.(input)
   }
 
-  test("creates provider and stubs kiro when provider is undefined", async () => {
+  test("no stored credential (no auth.json): hook is a no-op, adds no provider.kiro", async () => {
+    const input: Config = {}
+
+    await runConfig(input)
+
+    // Non-kiro user: the hook returns early, leaving provider untouched.
+    expect(input.provider).toBeUndefined()
+  })
+
+  test("auth.json without a kiro key: hook is a no-op, adds no provider.kiro", async () => {
+    writeAuthJson({ github: { type: "oauth" }, anthropic: { type: "api" } })
+    const input: Config = {}
+
+    await runConfig(input)
+
+    expect(input.provider).toBeUndefined()
+  })
+
+  test("stored kiro credential: creates provider and stubs kiro when provider is undefined", async () => {
+    writeAuthJson({ kiro: { type: "oauth" } })
     const input: Config = {}
 
     await runConfig(input)
@@ -181,7 +223,8 @@ describe("config hook (kiro provider stub)", () => {
     expect(input.provider).toEqual({ kiro: {} })
   })
 
-  test("adds an empty kiro stub without touching other providers", async () => {
+  test("stored kiro credential: adds an empty kiro stub without touching other providers", async () => {
+    writeAuthJson({ kiro: { type: "oauth" } })
     const input: Config = { provider: { openai: { name: "OpenAI" } } }
 
     await runConfig(input)
@@ -190,7 +233,8 @@ describe("config hook (kiro provider stub)", () => {
     expect(input.provider?.openai).toEqual({ name: "OpenAI" })
   })
 
-  test("does NOT clobber an existing kiro entry (idempotent / catalog-safe)", async () => {
+  test("stored kiro credential: does NOT clobber an existing kiro entry (idempotent / catalog-safe)", async () => {
+    writeAuthJson({ kiro: { type: "oauth" } })
     const existing = { name: "Kiro", models: { foo: { name: "Foo" } } }
     const input: Config = { provider: { kiro: existing } }
 
@@ -268,17 +312,19 @@ describe("provider hook (reasoning effort variants)", () => {
   })
 })
 
-describe("sidebar consent prompt (tui.json probe)", () => {
-  // Each case controls the isolated tui.json that server() probes at startup.
+describe("sidebar consent prompt (static, no startup tui.json read)", () => {
+  // Consent moved into the login flow: the prompt is a STATIC array and server()
+  // no longer probes tui.json at startup. Each case still cleans the isolated
+  // tui.json to prove startup behavior is independent of its content.
   afterEach(() => rmSync(join(xdgDir, "opencode"), { recursive: true, force: true }))
 
   const sidebarPrompt = (hook: AuthHook | undefined) =>
     hook?.methods[0]?.prompts?.find((p) => p.key === "sidebar")
 
-  test("offers the sidebar select when tui.json is not configured", async () => {
-    // No tui.json present -> not configured -> the consent prompt is shown.
+  test("always exposes the static sidebar consent select", async () => {
     const hooks = await serverPlugin.server(makeInput({ directory: "/tmp/proj" }))
 
+    expect(hooks.auth?.methods[0]?.prompts).toHaveLength(1)
     const prompt = sidebarPrompt(hooks.auth)
     expect(prompt?.type).toBe("select")
     expect(prompt?.message).toBe("Enable the Kiro credits sidebar?")
@@ -288,35 +334,19 @@ describe("sidebar consent prompt (tui.json probe)", () => {
     ])
   })
 
-  test("omits the prompt when opencode-kiro is already in the plugin array", async () => {
-    // Append model: configured = opencode-kiro present in `plugin` -> "don't ask
-    // twice" -> empty prompts (covers re-auth).
+  test("performs no startup tui.json read: SAME static prompt even when tui.json lists opencode-kiro", async () => {
+    // Precise regression guard for "no startup tui.json read". The OLD code read
+    // tui.json at startup and, when opencode-kiro was already in `plugin`,
+    // suppressed the prompt (empty array, "don't ask twice"). With THIS exact
+    // input, an invariant single-item prompt proves startup no longer reads or
+    // gates on tui.json; the prompt is now fully static.
     mkdirSync(dirname(tuiJsonPath()), { recursive: true })
     writeFileSync(tuiJsonPath(), JSON.stringify({ theme: "kanagawa", plugin: ["opencode-kiro"] }))
 
     const hooks = await serverPlugin.server(makeInput({ directory: "/tmp/proj" }))
 
-    expect(hooks.auth?.methods[0]?.prompts).toEqual([])
-    expect(sidebarPrompt(hooks.auth)).toBeUndefined()
-  })
-
-  test("omits the prompt based SOLELY on plugin, ignoring an unrelated plugin_enabled", async () => {
-    // "Configured" depends only on opencode-kiro being in `plugin`; the plugin no
-    // longer manages plugin_enabled, so an unrelated toggle never re-triggers the
-    // consent prompt.
-    mkdirSync(dirname(tuiJsonPath()), { recursive: true })
-    writeFileSync(
-      tuiJsonPath(),
-      JSON.stringify({
-        plugin: ["opencode-kiro"],
-        plugin_enabled: { "internal:other": true },
-      }),
-    )
-
-    const hooks = await serverPlugin.server(makeInput({ directory: "/tmp/proj" }))
-
-    expect(hooks.auth?.methods[0]?.prompts).toEqual([])
-    expect(sidebarPrompt(hooks.auth)).toBeUndefined()
+    expect(hooks.auth?.methods[0]?.prompts).toHaveLength(1)
+    expect(sidebarPrompt(hooks.auth)?.message).toBe("Enable the Kiro credits sidebar?")
   })
 })
 
@@ -642,26 +672,52 @@ describe("startup login nudge (notifyIfTokenExpired)", () => {
     expect(warn.mock.calls[0][0]).toContain("kiro-cli login")
   })
 
-  // F1, server(input) path: the startup nudge runs inside server(); proving the
-  // whole startup hook returns promptly even when its toast never settles guards
-  // against re-introducing an awaited UI call on the startup path.
-  test("F1: server(input) startup returns promptly when showToast never settles", async () => {
+  // The nudge moved OUT of server() startup and INTO the auth loader, which core
+  // only calls for users WITH a stored kiro credential. server() startup must
+  // therefore be fully silent: it must not consult whoami (verifyAuth) or log,
+  // even when the user is logged out. This is the core "no side effects for a
+  // non-kiro user at startup" guarantee.
+  test("server() startup runs no login nudge (no whoami, no warn)", async () => {
     mockVerifyAuth.mockReturnValue({ installed: true, authenticated: false })
-    vi.spyOn(console, "warn").mockImplementation(() => {})
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+    const { client } = makeToastClient()
+
+    await serverPlugin.server({ directory: "/tmp/proj", client } as unknown as PluginInput)
+
+    expect(mockVerifyAuth).not.toHaveBeenCalled()
+    expect(warn).not.toHaveBeenCalled()
+  })
+
+  // The nudge now lives in the auth loader as fire-and-forget. Invoking the
+  // loader triggers it WITHOUT awaiting: even a never-settling toast (the F1
+  // headless-hang condition) cannot block the loader's return, yet the warn line
+  // still surfaces. Guards against re-introducing an awaited UI call on the auth
+  // path and proves the nudge is wired into the loader.
+  test("F1: auth loader fires the nudge fire-and-forget and returns promptly despite a dead toast", async () => {
+    mockVerifyAuth.mockReturnValue({ installed: true, authenticated: false })
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
     const showToast = vi.fn(() => new Promise<never>(() => {}))
     const input = {
       directory: "/tmp/proj",
       client: { tui: { showToast } },
     } as unknown as PluginInput
 
+    const hooks = await serverPlugin.server(input)
+
     const start = Date.now()
     const timeout = new Promise<"timeout">((r) => setTimeout(() => r("timeout"), 1000))
     const outcome = await Promise.race([
-      serverPlugin.server(input).then(() => "resolved" as const),
+      hooks.auth?.loader?.(neverAuth, fakeProvider).then(() => "resolved" as const),
       timeout,
     ])
 
     expect(outcome).toBe("resolved")
     expect(Date.now() - start).toBeLessThan(1000)
+
+    // Let the fire-and-forget nudge settle, then assert it actually ran.
+    await new Promise((r) => setTimeout(r, 50))
+    expect(showToast).toHaveBeenCalledTimes(1)
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(warn.mock.calls[0][0]).toContain("kiro-cli login")
   })
 })

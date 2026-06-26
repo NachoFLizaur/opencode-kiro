@@ -1,13 +1,6 @@
-// Footer credits chip for the session prompt's right slot (session_prompt_right),
-// the host's only plugin-registerable slot in the prompt/footer area. It sits in
-// the prompt meta row alongside the host's token/context + "$X" cost chips.
-//
-// Renders "N credits" (same formatCredits as the sidebar) only when the session
-// carries Kiro credit metadata; otherwise renders an empty string so non-kiro
-// sessions keep the host's "$X" footer chip untouched and never see a kiro chip.
-//
-// Built with @opentui/solid's universal-renderer calls (compiled-Solid lowering)
-// so dist needs no solid transform; @opentui/solid and solid-js stay external.
+// footer credits chip for session_prompt_right (the host's only registerable prompt/footer slot), beside the host's token/cost chips.
+// renders "N credits" only when the session carries kiro metadata, else "" so non-kiro sessions keep the host's "$X" chip untouched.
+// built with @opentui/solid's universal-renderer calls (compiled-Solid lowering) so dist needs no solid transform; @opentui/solid and solid-js stay external.
 import type { TuiPluginApi } from "@opencode-ai/plugin/tui"
 import { createElement, effect, insert, setProp, type DomNode } from "@opentui/solid"
 import { createMemo } from "solid-js"
@@ -18,8 +11,7 @@ export function createCreditsChipView(api: TuiPluginApi, sessionID: string): Dom
   const messages = createMemo(() => api.state.session.messages(sessionID))
   const credits = createMemo(() => sumSessionCredits(messages(), (messageID) => api.state.part(messageID)))
 
-  // `wrapMode="none"` + `theme.textMuted` mirrors the host cost/token chip
-  // (prompt/index.tsx). Empty content collapses to zero width, i.e. nothing.
+  // wrapMode="none" + theme.textMuted mirrors the host cost/token chip (prompt/index.tsx); empty content collapses to zero width
   const chip = createElement("text")
   effect(() => setProp(chip, "fg", api.theme.current.textMuted))
   setProp(chip, "wrapMode", "none")

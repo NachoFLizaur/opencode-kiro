@@ -1,63 +1,47 @@
 import type { Hooks, Plugin, PluginInput } from "@opencode-ai/plugin"
+import { readFileSync } from "node:fs"
 import { homedir } from "node:os"
 import { dirname, join } from "node:path"
 
-// The plugin name as it appears in the user's tui.json `plugin` array. The
-// append model only ensures this entry is present; it never writes or reads
-// `plugin_enabled`.
+// plugin name in tui.json's `plugin` array; we only ensure it's present, never touch `plugin_enabled`
 const KIRO_PLUGIN_NAME = "opencode-kiro"
 
-// Auth-only server plugin: the kiro provider/model catalog lives on models.dev,
-// so this only supplies the `auth` hook. Must never export `tui` (the loader
-// rejects modules exporting both kinds).
-//
-// EXPERIMENT (experiment/auth-tui-config): on login we OFFER to wire up the
-// kiro credits sidebar by writing the user's global tui.json. server(input)
-// re-runs on every startup, so we re-check the file each session and only ask
-// when it isn't already configured ("don't ask twice", covers re-auth).
+// auth-only server plugin; the catalog lives on models.dev. never export `tui` (loader rejects modules with both).
+// runs for EVERY user at startup, so zero side effects for non-kiro users: no output, toast, kiro-cli spawn, or fs read.
+// the login nudge is deferred into the auth loader (auth-gated) and sidebar consent runs only during login.
 const server = async (input: PluginInput): Promise<Hooks> => {
-  // Startup login nudge (runs every session): if kiro-cli whoami reports the
-  // user is not logged in, surface a non-blocking toast/log telling them to
-  // re-auth. This is fully guarded and never throws; a rejection here would
-  // become a defect that crashes ALL providers.
-  await notifyIfTokenExpired(input.client)
-
-  const tuiPath = tuiConfigPath()
-  const alreadyConfigured = isSidebarConfigured(await readTuiConfig(tuiPath))
-
-  // Only OFFER the sidebar when it isn't already set up. When configured, omit
-  // the prompt entirely (empty array => the host shows nothing).
-  const prompts = alreadyConfigured
-    ? []
-    : [
-        {
-          type: "select" as const,
-          key: "sidebar",
-          message: "Enable the Kiro credits sidebar?",
-          options: [
-            { label: "Yes", value: "yes", hint: "writes tui.json; restart to apply" },
-            { label: "No", value: "no" },
-          ],
-        },
-      ]
+  // consent prompt; only shown during the Kiro CLI Login flow, not at startup. enableSidebarConfig is idempotent so we always offer it.
+  const prompts = [
+    {
+      type: "select" as const,
+      key: "sidebar",
+      message: "Enable the Kiro credits sidebar?",
+      options: [
+        { label: "Yes", value: "yes", hint: "writes tui.json; restart to apply" },
+        { label: "No", value: "no" },
+      ],
+    },
+  ]
 
   return {
     auth: {
       provider: "kiro",
-      // Returned options are forwarded into createKiroAcp({...}). Relays each
-      // catalog model's limit.context into contextWindows keyed by api.id;
-      // zero/missing limits are skipped (SDK falls back to 1M).
-      loader: async (_getAuth, provider) => ({
-        cwd: input.directory ?? input.worktree,
-        agent: "opencode",
-        trustAllTools: true,
-        mcpTimeout: 45,
-        contextWindows: Object.fromEntries(
-          Object.values(provider?.models ?? {})
-            .filter((m) => m.api?.id && (m.limit?.context ?? 0) > 0)
-            .map((m) => [m.api.id, m.limit.context]),
-        ),
-      }),
+      // options forwarded into createKiroAcp(). maps each model's limit.context into contextWindows by api.id; zero/missing skipped (SDK falls back to 1M).
+      loader: async (_getAuth, provider) => {
+        // nudge expired logins, fire-and-forget (don't await/block). loader only runs when a kiro cred exists, so this is auth-gated.
+        void notifyIfTokenExpired(input.client)
+        return {
+          cwd: input.directory ?? input.worktree,
+          agent: "opencode",
+          trustAllTools: true,
+          mcpTimeout: 45,
+          contextWindows: Object.fromEntries(
+            Object.values(provider?.models ?? {})
+              .filter((m) => m.api?.id && (m.limit?.context ?? 0) > 0)
+              .map((m) => [m.api.id, m.limit.context]),
+          ),
+        }
+      },
       methods: [
         {
           type: "oauth" as const,
@@ -72,14 +56,12 @@ const server = async (input: PluginInput): Promise<Hooks> => {
                 "kiro-cli is not installed. Install it from https://kiro.dev/docs/cli/",
               )
 
-            // Write the sidebar config only when we actually offered the prompt
-            // this session AND the user opted in. Runs after a SUCCESSFUL login.
-            const enableSidebar = !alreadyConfigured && inputs?.sidebar === "yes"
+            // wire up the sidebar only on opt-in, after a successful login. enableSidebarConfig is idempotent so no guard needed; tui.json write happens only here.
             const onSuccess = async () => {
-              if (enableSidebar) await enableSidebarConfig(tuiPath, input)
+              if (inputs?.sidebar === "yes") await enableSidebarConfig(tuiConfigPath(), input)
             }
 
-            // Already authed: return immediately
+            // already authed: skip the login flow
             if (status.authenticated) {
               return {
                 url: "",
@@ -93,11 +75,9 @@ const server = async (input: PluginInput): Promise<Hooks> => {
               }
             }
 
-            // Not authed: launch kiro-cli login and poll
+            // not authed: launch kiro-cli login and poll
             const { execFile } = await import("node:child_process")
-            // shell:true on win32 so the bare "kiro-cli" name resolves via
-            // PATHEXT to kiro-cli.exe/.cmd (matches the SDK's own win32-safe
-            // spawns). shell:false on macOS/Linux keeps behavior identical.
+            // shell:true on win32 so bare "kiro-cli" resolves via PATHEXT to .exe/.cmd (matches the SDK's spawns); shell:false elsewhere
             const child = execFile("kiro-cli", ["login"], {
               shell: process.platform === "win32",
             })
@@ -108,7 +88,7 @@ const server = async (input: PluginInput): Promise<Hooks> => {
                 "Complete Kiro authentication in the browser window that just opened. Waiting for login...",
               method: "auto" as const,
               async callback() {
-                // Poll until authed (login runs in the background)
+                // poll until authed (login runs in the background)
                 const maxWait = 120_000
                 const start = Date.now()
                 while (Date.now() - start < maxWait) {
@@ -131,21 +111,20 @@ const server = async (input: PluginInput): Promise<Hooks> => {
         },
       ],
     },
-    // Ensure a kiro provider entry exists so a stored login plus a kiro-less
-    // catalog cannot crash opencode (core derefs an undefined provider during
-    // auth init). Mutates in place; the ??= keeps it idempotent and never
-    // clobbers a real models.dev kiro entry when one is present.
+    // crash guard: core derefs an undefined kiro provider during auth init when a cred exists but the catalog lacks kiro.
+    // only inject when authed; ??= is idempotent and won't clobber a real catalog entry.
     config: async (input) => {
+      if (!hasStoredKiroCredential()) return
       input.provider ??= {}
       input.provider.kiro ??= {}
     },
     provider: {
       id: "kiro",
-      // Inject per-model reasoning-effort variants, consumed as providerOptions.kiro.reasoningEffort.
+      // inject per-model reasoning-effort variants (consumed as providerOptions.kiro.reasoningEffort)
       async models(provider, _ctx) {
         const { reasoningEffortsFor } = await import("kiro-acp-ai-provider")
         for (const model of Object.values(provider.models)) {
-          // Guard the api.id deref: a malformed catalog entry must not fail provider registration.
+          // guard the api.id deref: a malformed catalog entry must not fail registration
           const apiId = model.api?.id
           if (!apiId) continue
           const levels = reasoningEffortsFor(apiId)
@@ -160,15 +139,12 @@ const server = async (input: PluginInput): Promise<Hooks> => {
   }
 }
 
-// The kiro-cli token file path the SDK reads (~/.aws/sso/cache/kiro-auth-token.json).
-// Kept in sync with kiro-acp-ai-provider's verifyAuth() resolution so the startup
-// check inspects the SAME file the provider authenticates against.
+// kiro-cli token file the SDK reads (~/.aws/sso/cache/kiro-auth-token.json). kept in sync with the SDK's verifyAuth() so we inspect the same file.
 export function kiroTokenPath(): string {
   return join(homedir(), ".aws", "sso", "cache", "kiro-auth-token.json")
 }
 
-// Read+parse the kiro-cli token file. Returns the parsed object, or undefined
-// when the file is missing, unreadable, or not a JSON object. Never throws.
+// read+parse the token file; undefined when missing, unreadable, or non-object. never throws.
 async function readKiroTokenFile(
   tokenPath: string,
 ): Promise<Record<string, unknown> | undefined> {
@@ -183,25 +159,20 @@ async function readKiroTokenFile(
   }
 }
 
-// Build opencode's auth record, gated on kiro-cli whoami (verifyAuth), NOT the
-// on-disk token file. The file expiresAt is meaningless (kiro-cli does not
-// rewrite it on login; the live credential lives in the OS store and whoami
-// self-heals), so a stale or missing file MUST NOT refuse a logged-in user.
-// On success it emits a FUTURE expires so opencode-core does not flag the
-// provider, and carries the file's REAL refresh token when present.
+// build opencode's auth record, gated on kiro-cli whoami, NOT the on-disk file.
+// file expiresAt is meaningless (kiro-cli never rewrites it; the cred lives in the OS store and whoami self-heals), so a stale/missing file must not refuse a logged-in user.
+// on success emits a future expires so core doesn't flag the provider, and carries the file's real refresh token when present.
 export async function readToken(
   tokenPath: string | undefined,
 ): Promise<
   | { type: "success"; refresh: string; access: string; expires: number }
   | { type: "failed" }
 > {
-  // Authority = kiro-cli whoami (abstracts the per-OS credential store).
+  // authority is kiro-cli whoami (abstracts the per-OS credential store)
   const { verifyAuth } = await import("kiro-acp-ai-provider")
   if (!verifyAuth().authenticated) return { type: "failed" as const }
 
-  // Logged in. The cached file is OPTIONAL and only used for the real refresh
-  // token / cosmetic access value; a stale or missing file MUST NOT refuse a
-  // logged-in user (that was the core bug). Never throws.
+  // logged in. the cached file is optional, only for the real refresh token / cosmetic access; a stale/missing file must not refuse a logged-in user (the core bug). never throws.
   const token = tokenPath ? await readKiroTokenFile(tokenPath) : undefined
   const access = typeof token?.accessToken === "string" ? token.accessToken : ""
   const refresh = typeof token?.refreshToken === "string" ? token.refreshToken : ""
@@ -210,27 +181,14 @@ export async function readToken(
     type: "success" as const,
     refresh, // real refresh when present, else ""
     access: access || "authenticated", // cosmetic; opencode-core only needs presence
-    // FUTURE expiry, refreshed every startup (server() re-runs each session) so
-    // opencode-core does not flag a logged-in user as expired. NOT the file value.
+    // future expiry, refreshed each startup (server() re-runs per session) so core doesn't flag a logged-in user as expired. not the file value.
     expires: Date.now() + 8 * 60 * 60 * 1000,
   }
 }
 
-// Startup login nudge. When kiro-cli whoami (verifyAuth) reports the user is
-// NOT logged in, surface a non-blocking nudge telling them to run kiro-cli
-// login. The gate is whoami, NOT the on-disk file expiresAt (which is
-// meaningless and false-warned on every startup). Because kiro-cli auto-re-
-// authenticates, a logged-in user reads authenticated=true and this is silent.
-// MUST NEVER throw, reject, OR BLOCK/HANG: the auth loader runs inside an
-// Effect.promise, so any rejection becomes a defect that crashes ALL providers,
-// and a hang blocks startup for every provider. Every step is guarded.
-//
-// FINDING F1: the LOG line is emitted FIRST, synchronously, and the toast is
-// FIRE-AND-FORGET (never awaited). A HEADLESS (non-TUI) run has no TUI receiver,
-// so showToast's promise NEVER resolves; awaiting it hung startup forever (it
-// hangs rather than throws, so the old try/catch + .catch() fallback never ran).
-// Logging first guarantees headless still gets the message; the toast is a
-// best-effort UI enhancement that only matters when a TUI is actually attached.
+// nudge when kiro-cli whoami reports not-logged-in. gate is whoami, not the file expiresAt (meaningless, false-warns every startup).
+// must never throw/reject/block: the loader runs in an Effect.promise, so a rejection crashes ALL providers and a hang blocks startup.
+// F1: log FIRST (synchronous, reaches headless runs), then fire-and-forget the toast; headless has no TUI receiver, so awaiting showToast hangs forever.
 export async function notifyIfTokenExpired(
   client: PluginInput["client"] | undefined,
 ): Promise<void> {
@@ -240,61 +198,54 @@ export async function notifyIfTokenExpired(
 
     const message = "Kiro is not logged in. Run 'kiro-cli login' to authenticate."
 
-    // 1) LOG FIRST: synchronous + reliable. The only channel guaranteed to reach
-    //    a headless (non-TUI) run, which has no receiver for a toast.
+    // log first: synchronous, the only channel that reaches a headless run
     console.warn(message)
 
-    // 2) Toast is FIRE-AND-FORGET: do NOT await it. With no TUI attached the
-    //    promise never settles; awaiting it would hang startup (finding F1).
+    // toast is fire-and-forget: with no TUI attached the promise never settles, so awaiting would hang (F1)
     void client?.tui?.showToast?.({ body: { message, variant: "warning" } })?.catch(() => {})
   } catch {
-    // Never rethrow: a rejection here becomes a defect that crashes all providers.
+    // never rethrow: a rejection becomes a defect that crashes all providers
   }
 }
 
-// Global tui.json location: $XDG_CONFIG_HOME/opencode/tui.json, else
-// ~/.config/opencode/tui.json. Mirrors opencode's own config resolution so the
-// toggle lands where the TUI actually reads it.
+// stored kiro cred? read auth.json the way opencode-gitlab-auth does (no plugin auth API): $XDG_DATA_HOME, else ~/.local/share (posix) or ~/.opencode (win32).
+// true iff a "kiro" key exists. silent and never throws: gates a hook that runs for every user.
+function hasStoredKiroCredential(): boolean {
+  try {
+    const path = process.env.XDG_DATA_HOME
+      ? join(process.env.XDG_DATA_HOME, "opencode", "auth.json")
+      : process.platform === "win32"
+        ? join(homedir(), ".opencode", "auth.json")
+        : join(homedir(), ".local", "share", "opencode", "auth.json")
+    const parsed = JSON.parse(readFileSync(path, "utf8"))
+    return (
+      typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) && "kiro" in parsed
+    )
+  } catch {
+    return false
+  }
+}
+
+// global tui.json: $XDG_CONFIG_HOME, else ~/.config. mirrors opencode's resolution so the toggle lands where the TUI reads it.
 function tuiConfigPath(): string {
   const base = process.env.XDG_CONFIG_HOME || join(homedir(), ".config")
   return join(base, "opencode", "tui.json")
 }
 
-// Read+parse the global tui.json. Returns the object, or undefined when the file
-// is missing or unparseable (either way: treat as "not configured").
-async function readTuiConfig(path: string): Promise<Record<string, unknown> | undefined> {
-  try {
-    const { readFile } = await import("node:fs/promises")
-    const parsed = JSON.parse(await readFile(path, "utf8"))
-    return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : undefined
-  } catch {
-    return undefined
-  }
-}
-
-// "Already configured" = opencode-kiro is present in the `plugin` array. That
-// single entry is all the credits box needs; the plugin never writes or reads
-// `plugin_enabled`, so nothing else affects this check.
+// "configured" = opencode-kiro is in the `plugin` array; that single entry is all the credits box needs. we never touch `plugin_enabled`.
 function isSidebarConfigured(config: Record<string, unknown> | undefined): boolean {
   if (!config) return false
   const plugin = config.plugin
   return Array.isArray(plugin) && plugin.includes(KIRO_PLUGIN_NAME)
 }
 
-// Idempotently ensure opencode-kiro is in the global tui.json `plugin` array
-// after a successful login. Append model: it ONLY adds the plugin entry; it never
-// writes, reads, or deletes `plugin_enabled`. Defensive + non-destructive: starts
-// from {} when the file is missing, bails (no write) when it exists but is
-// unparseable, preserves all other keys (including any unrelated plugin_enabled),
-// and NEVER throws: a config-write failure must not fail auth. Exported for tests.
+// idempotently add opencode-kiro to tui.json's `plugin` array after login. append-only: never touches `plugin_enabled`.
+// non-destructive: starts from {} when missing, bails on unparseable (no clobber), preserves other keys, never throws (a write failure must not fail auth). exported for tests.
 export async function enableSidebarConfig(path: string, input: PluginInput): Promise<void> {
   try {
     const { readFile, writeFile, mkdir } = await import("node:fs/promises")
 
-    // Read the raw file separately from parsing so we can tell "missing" (start
-    // fresh from {}) apart from "exists but unparseable" (don't clobber).
+    // read raw separately from parsing so "missing" (start from {}) differs from "exists but unparseable" (don't clobber)
     let raw: string | undefined
     try {
       raw = await readFile(path, "utf8")
@@ -311,15 +262,15 @@ export async function enableSidebarConfig(path: string, input: PluginInput): Pro
         if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return
         config = parsed as Record<string, unknown>
       } catch {
-        // File exists but is unparseable: skip the write, don't clobber it.
+        // exists but unparseable: skip the write, don't clobber
         return
       }
     }
 
-    // Idempotent: already wired up (plugin present), nothing to do.
+    // idempotent: already wired up, nothing to do
     if (isSidebarConfigured(config)) return
 
-    // Ensure opencode-kiro is in `plugin` (create + dedup); preserve any others.
+    // add opencode-kiro to `plugin` (create + dedup), preserve any others
     const plugin = Array.isArray(config.plugin) ? [...(config.plugin as unknown[])] : []
     if (!plugin.includes(KIRO_PLUGIN_NAME)) plugin.push(KIRO_PLUGIN_NAME)
     config.plugin = plugin
@@ -327,7 +278,7 @@ export async function enableSidebarConfig(path: string, input: PluginInput): Pro
     await mkdir(dirname(path), { recursive: true })
     await writeFile(path, JSON.stringify(config, null, 2) + "\n", "utf8")
 
-    // Best-effort UX notice: only renders if a TUI is attached, harmless if not.
+    // best-effort notice: only renders with a TUI attached, harmless otherwise
     try {
       await input.client.tui.showToast({
         body: {
@@ -336,17 +287,15 @@ export async function enableSidebarConfig(path: string, input: PluginInput): Pro
         },
       })
     } catch {
-      // No TUI / toast unavailable: ignore.
+      // no TUI / toast unavailable: ignore
     }
   } catch {
-    // Never let a config-write error break a successful auth.
+    // never let a config-write error break a successful auth
   }
 }
 
-// Named export for bundling: same function reference as the default's `server`,
-// so the two can't drift. Lets opencode do `import { KiroAuthPlugin }`, matching
-// GitlabAuthPlugin/PoeAuthPlugin/CopilotAuthPlugin.
+// named export, same reference as the default's `server` so the two can't drift. matches GitlabAuthPlugin/PoeAuthPlugin/CopilotAuthPlugin.
 export const KiroAuthPlugin: Plugin = server
 
-// Default export drives opencode's external plugin loader, which reads `default`.
+// default export drives opencode's external plugin loader, which reads `default`
 export default { id: "kiro", server }
