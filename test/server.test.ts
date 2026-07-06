@@ -229,6 +229,31 @@ describe("config hook (kiro provider stub, gated on a stored kiro credential)", 
     expect(input.provider).toEqual({ kiro: {} })
   })
 
+  test("stored kiro credential: reads opencode's default data path when XDG_DATA_HOME is unset", async () => {
+    const prevHome = process.env.HOME
+    const prevXdgData = process.env.XDG_DATA_HOME
+    const home = mkdtempSync(join(tmpdir(), "kiro-home-test-"))
+
+    try {
+      delete process.env.XDG_DATA_HOME
+      process.env.HOME = home
+      const path = join(home, ".local", "share", "opencode", "auth.json")
+      mkdirSync(dirname(path), { recursive: true })
+      writeFileSync(path, JSON.stringify({ kiro: { type: "oauth" } }))
+
+      const input: Config = {}
+      await runConfig(input)
+
+      expect(input.provider).toEqual({ kiro: {} })
+    } finally {
+      if (prevXdgData === undefined) delete process.env.XDG_DATA_HOME
+      else process.env.XDG_DATA_HOME = prevXdgData
+      if (prevHome === undefined) delete process.env.HOME
+      else process.env.HOME = prevHome
+      rmSync(home, { recursive: true, force: true })
+    }
+  })
+
   test("stored kiro credential: adds an empty kiro stub without touching other providers", async () => {
     writeAuthJson({ kiro: { type: "oauth" } })
     const input: Config = { provider: { openai: { name: "OpenAI" } } }

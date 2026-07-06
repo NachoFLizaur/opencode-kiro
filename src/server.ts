@@ -204,22 +204,26 @@ export async function notifyIfTokenExpired(
   }
 }
 
-// stored kiro cred? read auth.json the way opencode-gitlab-auth does (no plugin auth API): $XDG_DATA_HOME, else ~/.local/share (posix) or ~/.opencode (win32).
+// stored kiro cred? read auth.json from opencode's xdg-basedir data path.
 // true iff a "kiro" key exists. silent and never throws: gates a hook that runs for every user.
 function hasStoredKiroCredential(): boolean {
-  try {
-    const path = process.env.XDG_DATA_HOME
-      ? join(process.env.XDG_DATA_HOME, "opencode", "auth.json")
-      : process.platform === "win32"
-        ? join(homedir(), ".opencode", "auth.json")
-        : join(homedir(), ".local", "share", "opencode", "auth.json")
-    const parsed = JSON.parse(readFileSync(path, "utf8"))
-    return (
-      typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) && "kiro" in parsed
-    )
-  } catch {
-    return false
-  }
+  return authJsonPaths().some((path) => {
+    try {
+      const parsed = JSON.parse(readFileSync(path, "utf8"))
+      return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) && "kiro" in parsed
+    } catch {
+      return false
+    }
+  })
+}
+
+function authJsonPaths(): string[] {
+  if (process.env.XDG_DATA_HOME) return [join(process.env.XDG_DATA_HOME, "opencode", "auth.json")]
+
+  const current = join(homedir(), ".local", "share", "opencode", "auth.json")
+  if (process.platform !== "win32") return [current]
+
+  return [current, join(homedir(), ".opencode", "auth.json")]
 }
 
 // global tui.json: $XDG_CONFIG_HOME, else ~/.config. mirrors opencode's resolution so the toggle lands where the TUI reads it.
