@@ -90,17 +90,10 @@ path-sourced TUI plugins **must export an `id`** (opencode rejects them otherwis
 this package ships `{ id: "opencode-kiro", tui }`, so the id is identical across path
 and npm installs.
 
-Because the provider now comes from the catalog rather than the plugin, a local checkout
-also needs a catalog that includes `kiro`. opencode reads its catalog from
-`OPENCODE_MODELS_PATH` when set; point it at an `api.json` that contains the `kiro`
-provider (for example one generated from a [models.dev](https://models.dev) checkout):
-
-```bash
-OPENCODE_MODELS_PATH=/path/to/api.json opencode models | grep '^kiro/'
-```
-
-Until the catalog opencode loads contains `kiro`, the provider will not appear regardless
-of this plugin being installed (the plugin only adds auth, not the provider definition).
+When the catalog includes `kiro`, opencode loads its complete model lineup normally. If the
+catalog entry is temporarily unavailable, the plugin supplies an authenticated `kiro/auto`
+fallback so a local checkout remains usable without `OPENCODE_MODELS_PATH`. The fallback is
+merged with, and never replaces, a real catalog entry.
 
 ## Auth
 
@@ -125,15 +118,17 @@ If the flow times out, authenticate directly with kiro-cli (`kiro-cli login`) an
 
 ## Models
 
-This plugin supports all models in the US region, defined in the [models.dev](https://models.dev) `kiro`
-catalog entry. opencode loads them from there. List them with:
+The full US-region lineup comes from the [models.dev](https://models.dev) `kiro`
+catalog entry. If that entry is missing, authenticated users still get the plugin's
+minimal `kiro/auto` fallback. List and run models with:
 ```bash
-opencode models           # lists kiro/auto, kiro/claude-opus-4.8, ...
+opencode models kiro
 opencode run -m kiro/auto "hello"
 ```
 
-Image input is capability-driven: paste an image path into the TUI prompt and
-image-capable models receive it as an attachment.
+When the catalog is available, `opencode models kiro` also lists the individual models
+supported by that catalog. Image input is capability-driven: paste an image path into
+the TUI prompt and image-capable models receive it as an attachment.
 
 ### Reasoning effort
 
@@ -203,9 +198,10 @@ would require opencode core changes and is intentionally out of scope for this p
 
 ## How it works
 
-- **Provider & models (models.dev)**: opencode loads the `kiro` provider and its full
-  model list from the models.dev catalog. This plugin does **not** define any provider or
-  model config of its own; there is no `config` hook.
+- **Provider & models (models.dev + fallback)**: opencode normally loads the `kiro`
+  provider and full model list from models.dev. For authenticated users, this plugin's
+  `config` hook supplies a minimal `kiro/auto` provider when that catalog entry is absent.
+  OpenCode merges the fallback with a real catalog entry, preserving the full lineup.
 - **SDK resolution (resolveSDK)**: opencode reads the catalog's `npm` field
   (`kiro-acp-ai-provider`), installs that package into its package cache on first model
   use, and imports it. This plugin's `auth` loader supplies the provider options
@@ -233,7 +229,7 @@ would require opencode core changes and is intentionally out of scope for this p
 | Auth times out after ~120s | Complete the browser login faster, or run `kiro-cli login` yourself, then re-run `opencode auth login` (fast path). |
 | No credits line / credits stay 0 | Credits appear after the first **completed** kiro turn; cancelled turns and turns without usage metadata contribute nothing. Check the TUI plugin is `active` in the Plugins dialog (and listed in `tui.json`). |
 | Credits box never appears (even with `tui.json` configured correctly) | The TUI credits box renders only when `opencode-kiro` is resolvable in opencode's package cache. If the package is missing from the cache the box silently does not appear. Fix: ensure `opencode-kiro` is installed so it resolves in the cache. Do **not** manually clear the package cache: clearing can trigger a flaky on-demand refetch that fails with an "unknown git error". |
-| `kiro` provider not showing in `opencode models` | The provider comes from the models.dev catalog, not this plugin. Ensure your opencode version ships a catalog that includes `kiro` (run `opencode models --refresh` to update the cache). For local development, point opencode at a kiro-inclusive catalog via `OPENCODE_MODELS_PATH=/path/to/api.json` (see [Local development](#local-development-path-source)). |
+| `kiro` provider not showing in `opencode models` | Run `opencode auth login` and select **Kiro CLI Login**, then restart opencode. A stored Kiro credential enables the `kiro/auto` fallback even when models.dev is temporarily missing Kiro; the full lineup appears when the catalog entry is available. |
 | `sdk.languageModel is not a function` | A stale `kiro-acp-ai-provider` from before the 2.0.x line resolved from opencode's package cache. Remove the cached copy (`$XDG_CACHE_HOME/opencode/packages/kiro-acp-ai-provider`, default `~/.cache/opencode/packages/...`) and retry; the factory auto-discovery clash was fixed in the 2.0.x line, and this plugin currently pins 2.1.0. |
 | Path install rejected (`must export id`) | Run `npm run build` in your checkout first and reference the repo root (both entry modules export ids). |
 | Provider visible but runs fail | The provider is selectable (from the catalog) before any credential exists. Run `opencode auth login` first. |

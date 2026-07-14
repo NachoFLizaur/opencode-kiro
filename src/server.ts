@@ -6,6 +6,34 @@ import { dirname, join } from "node:path"
 // plugin name in tui.json's `plugin` array; we only ensure it's present, never touch `plugin_enabled`
 const KIRO_PLUGIN_NAME = "opencode-kiro"
 
+// Minimal config fallback for the window where opencode's models.dev catalog has no Kiro entry.
+// Keep this deliberately limited to `auto`: the catalog remains the source of truth for the
+// full, fast-changing model lineup and is merged with this config overlay when present.
+function kiroFallbackProvider() {
+  return {
+    name: "Kiro",
+    env: ["KIRO_API_KEY"],
+    npm: "kiro-acp-ai-provider",
+    api: "https://q.us-east-1.amazonaws.com",
+    models: {
+      auto: {
+        name: "Auto",
+        family: "claude-sonnet",
+        attachment: true,
+        reasoning: false,
+        temperature: true,
+        tool_call: true,
+        cost: { input: 0, output: 0 },
+        limit: { context: 1_000_000, output: 64_000 },
+        modalities: {
+          input: ["text", "image"] as ("text" | "image")[],
+          output: ["text"] as "text"[],
+        },
+      },
+    },
+  }
+}
+
 // auth-only server plugin; the catalog lives on models.dev. never export `tui` (loader rejects modules with both).
 // runs for EVERY user at startup, so zero side effects for non-kiro users: no output, toast, kiro-cli spawn, or fs read.
 // the login nudge is deferred into the auth loader (auth-gated) and sidebar consent runs only during login.
@@ -105,12 +133,13 @@ const server = async (input: PluginInput): Promise<Hooks> => {
         },
       ],
     },
-    // crash guard: core derefs an undefined kiro provider during auth init when a cred exists but the catalog lacks kiro.
-    // only inject when authed; ??= is idempotent and won't clobber a real catalog entry.
+    // A stored login plus a temporarily missing catalog entry must still leave one usable
+    // model. Config providers merge with catalog providers, so this fallback neither replaces
+    // nor limits the full lineup when models.dev contains Kiro.
     config: async (input) => {
       if (!hasStoredKiroCredential()) return
       input.provider ??= {}
-      input.provider.kiro ??= {}
+      input.provider.kiro ??= kiroFallbackProvider()
     },
     provider: {
       id: "kiro",

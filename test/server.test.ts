@@ -181,20 +181,36 @@ describe("server hooks", () => {
   })
 })
 
-// The config hook stubs a kiro provider entry so a stored login plus a kiro-less
-// models.dev catalog cannot crash opencode (core derefs an undefined provider).
-// It is GATED on a stored kiro credential: the crash only affects users WITH a
-// kiro login, so a non-kiro user must get no phantom provider mutation.
-describe("config hook (kiro provider stub, gated on a stored kiro credential)", () => {
-  // The gate reads $XDG_DATA_HOME/opencode/auth.json (isolated for the file).
-  // Each case writes the auth.json it needs and clears it afterward; with no
-  // auth.json present the gate is false and the hook must be a no-op.
+// The config hook supplies a minimal usable provider while the models.dev Kiro entry is
+// unavailable. It is gated on a stored Kiro credential, so non-Kiro users get no startup
+// work or phantom provider. OpenCode merges this overlay with the full catalog when present.
+describe("config hook (kiro auto fallback, gated on a stored kiro credential)", () => {
   const authJsonPath = () => join(xdgDataDir, "opencode", "auth.json")
   const writeAuthJson = (body: unknown): void => {
     mkdirSync(dirname(authJsonPath()), { recursive: true })
     writeFileSync(authJsonPath(), JSON.stringify(body))
   }
   afterEach(() => rmSync(join(xdgDataDir, "opencode"), { recursive: true, force: true }))
+
+  const expectedFallback = {
+    name: "Kiro",
+    env: ["KIRO_API_KEY"],
+    npm: "kiro-acp-ai-provider",
+    api: "https://q.us-east-1.amazonaws.com",
+    models: {
+      auto: {
+        name: "Auto",
+        family: "claude-sonnet",
+        attachment: true,
+        reasoning: false,
+        temperature: true,
+        tool_call: true,
+        cost: { input: 0, output: 0 },
+        limit: { context: 1_000_000, output: 64_000 },
+        modalities: { input: ["text", "image"], output: ["text"] },
+      },
+    },
+  }
 
   /** Run the config hook against the given config, mutating it in place. */
   const runConfig = async (input: Config): Promise<void> => {
@@ -207,7 +223,6 @@ describe("config hook (kiro provider stub, gated on a stored kiro credential)", 
 
     await runConfig(input)
 
-    // Non-kiro user: the hook returns early, leaving provider untouched.
     expect(input.provider).toBeUndefined()
   })
 
@@ -220,13 +235,13 @@ describe("config hook (kiro provider stub, gated on a stored kiro credential)", 
     expect(input.provider).toBeUndefined()
   })
 
-  test("stored kiro credential: creates provider and stubs kiro when provider is undefined", async () => {
+  test("stored kiro credential: creates a usable auto fallback", async () => {
     writeAuthJson({ kiro: { type: "oauth" } })
     const input: Config = {}
 
     await runConfig(input)
 
-    expect(input.provider).toEqual({ kiro: {} })
+    expect(input.provider).toEqual({ kiro: expectedFallback })
   })
 
   test("stored kiro credential: reads opencode's default data path when XDG_DATA_HOME is unset", async () => {
@@ -244,7 +259,7 @@ describe("config hook (kiro provider stub, gated on a stored kiro credential)", 
       const input: Config = {}
       await runConfig(input)
 
-      expect(input.provider).toEqual({ kiro: {} })
+      expect(input.provider).toEqual({ kiro: expectedFallback })
     } finally {
       if (prevXdgData === undefined) delete process.env.XDG_DATA_HOME
       else process.env.XDG_DATA_HOME = prevXdgData
@@ -254,24 +269,23 @@ describe("config hook (kiro provider stub, gated on a stored kiro credential)", 
     }
   })
 
-  test("stored kiro credential: adds an empty kiro stub without touching other providers", async () => {
+  test("stored kiro credential: adds the fallback without touching other providers", async () => {
     writeAuthJson({ kiro: { type: "oauth" } })
     const input: Config = { provider: { openai: { name: "OpenAI" } } }
 
     await runConfig(input)
 
-    expect(input.provider?.kiro).toEqual({})
+    expect(input.provider?.kiro).toEqual(expectedFallback)
     expect(input.provider?.openai).toEqual({ name: "OpenAI" })
   })
 
-  test("stored kiro credential: does NOT clobber an existing kiro entry (idempotent / catalog-safe)", async () => {
+  test("stored kiro credential: does NOT clobber an existing kiro entry", async () => {
     writeAuthJson({ kiro: { type: "oauth" } })
     const existing = { name: "Kiro", models: { foo: { name: "Foo" } } }
     const input: Config = { provider: { kiro: existing } }
 
     await runConfig(input)
 
-    // Same reference, fields untouched: a real models.dev kiro entry survives.
     expect(input.provider?.kiro).toBe(existing)
     expect(input.provider?.kiro).toEqual({ name: "Kiro", models: { foo: { name: "Foo" } } })
   })

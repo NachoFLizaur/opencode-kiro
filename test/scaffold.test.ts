@@ -94,9 +94,11 @@ describe("scaffold package contract", () => {
       const code = await readFile(distPath(file), "utf8")
       const residue = withoutImportSpecifiers(code)
 
-      // Externals may appear only as import specifiers; any residual mention
-      // means the host/SDK package was bundled instead of left external.
-      expect(residue).not.toContain("kiro-acp-ai-provider")
+      // Externals may appear only as import specifiers. server.js additionally contains
+      // one required provider-config value (`npm: "kiro-acp-ai-provider"`); any further
+      // residual mention indicates an inlined SDK source path.
+      const sdkMentions = residue.match(/kiro-acp-ai-provider/g) ?? []
+      expect(sdkMentions).toHaveLength(file === "server.js" ? 1 : 0)
       expect(residue).not.toContain("@opencode-ai/plugin")
     }
   })
