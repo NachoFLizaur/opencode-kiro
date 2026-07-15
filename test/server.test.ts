@@ -231,12 +231,17 @@ describe("config hook (kiro provider stub, gated on a stored kiro credential)", 
 
   test("stored kiro credential: reads opencode's default data path when XDG_DATA_HOME is unset", async () => {
     const prevHome = process.env.HOME
+    const prevUserProfile = process.env.USERPROFILE
     const prevXdgData = process.env.XDG_DATA_HOME
     const home = mkdtempSync(join(tmpdir(), "kiro-home-test-"))
 
     try {
       delete process.env.XDG_DATA_HOME
+      // The SUT reads home via os.homedir(), which honors $HOME on POSIX but
+      // %USERPROFILE% on win32 (it ignores $HOME there). Override both so the
+      // temp home takes effect on every platform.
       process.env.HOME = home
+      process.env.USERPROFILE = home
       const path = join(home, ".local", "share", "opencode", "auth.json")
       mkdirSync(dirname(path), { recursive: true })
       writeFileSync(path, JSON.stringify({ kiro: { type: "oauth" } }))
@@ -250,6 +255,8 @@ describe("config hook (kiro provider stub, gated on a stored kiro credential)", 
       else process.env.XDG_DATA_HOME = prevXdgData
       if (prevHome === undefined) delete process.env.HOME
       else process.env.HOME = prevHome
+      if (prevUserProfile === undefined) delete process.env.USERPROFILE
+      else process.env.USERPROFILE = prevUserProfile
       rmSync(home, { recursive: true, force: true })
     }
   })
