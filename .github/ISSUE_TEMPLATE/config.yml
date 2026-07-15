@@ -1,7 +1,1 @@
 blank_issues_enabled: false
-# To add a support/discussion link (e.g. GitHub Discussions or a chat server),
-# uncomment the block below and fill in a real name, url, and about text.
-# contact_links:
-#   - name: Discussions
-#     url: https://github.com/NachoFLizaur/opencode-kiro/discussions
-#     about: Ask questions and discuss ideas here.
