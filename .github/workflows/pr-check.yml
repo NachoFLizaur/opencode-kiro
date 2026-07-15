@@ -1,0 +1,76 @@
+name: PR Checklist
+
+on:
+  pull_request:
+    types: [opened, edited, reopened, ready_for_review, synchronize, labeled, unlabeled]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  template:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+
+            // Escape hatches: skip bots, drafts, and an explicit opt-out label.
+            const labels = (pr.labels || []).map((l) => l.name.toLowerCase());
+            if (pr.user && pr.user.type === "Bot") {
+              core.info("Author is a bot; skipping PR template check.");
+              return;
+            }
+            if (pr.draft) {
+              core.info("Draft PR; skipping PR template check.");
+              return;
+            }
+            if (labels.includes("skip-pr-check")) {
+              core.info("skip-pr-check label present; skipping.");
+              return;
+            }
+
+            const body = (pr.body || "").trim();
+            const problems = [];
+
+            if (body.length === 0) {
+              problems.push("The PR description is empty. Please fill in the template.");
+            }
+
+            // 1. Linked issue reference, e.g. Closes #123.
+            if (!/#\d+/.test(body)) {
+              problems.push("No linked issue found. Reference one with `Closes #123` (or `Refs #123`).");
+            }
+
+            // 2. At least one Type of change box ticked.
+            const typeMatch = body.match(/###\s*Type of change([\s\S]*?)(?:\n###\s|\n##\s|$)/i);
+            const typeSection = typeMatch ? typeMatch[1] : "";
+            if (!/- \[[xX]\]/.test(typeSection)) {
+              problems.push("No Type of change selected. Tick at least one box (`- [x]`).");
+            }
+
+            // 3. Description section must not be just the placeholder.
+            const descMatch = body.match(/###\s*What does[^\n]*\n([\s\S]*?)(?:\n###\s|\n##\s|$)/i);
+            const desc = (descMatch ? descMatch[1] : "")
+              .replace(/\*\*If you paste[\s\S]*?CLOSED!\*\*/i, "")
+              .replace(/Briefly describe the change and why it works\.?/i, "")
+              .trim();
+            if (desc.length < 10) {
+              problems.push("The What does this PR do section looks empty. Add a short description.");
+            }
+
+            if (problems.length > 0) {
+              core.setFailed(
+                "PR does not follow the template yet:\n- " +
+                  problems.join("\n- ") +
+                  "\n\nEdit the PR description to fix these. Maintainers can bypass by adding the `skip-pr-check` label."
+              );
+            } else {
+              core.info("PR template checks passed.");
+            }

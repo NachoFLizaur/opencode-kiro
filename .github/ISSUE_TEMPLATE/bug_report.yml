@@ -1,0 +1,90 @@
+name: Bug report
+description: Report something broken in the opencode-kiro plugin
+labels: ["bug"]
+assignees:
+  - NachoFLizaur
+body:
+  - type: checkboxes
+    id: search
+    attributes:
+      label: Pre-flight check
+      options:
+        - label: I searched existing issues and did not find a duplicate.
+          required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: What is the bug?
+      placeholder: A clear description of what went wrong.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: How can this be reproduced?
+      placeholder: |
+        1.
+        2.
+        3.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What did you expect to happen?
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: What actually happened? Include any error output.
+    validations:
+      required: true
+
+  - type: markdown
+    attributes:
+      value: "## Environment"
+
+  - type: input
+    id: opencode-version
+    attributes:
+      label: opencode version
+      description: Output of `opencode --version`.
+      placeholder: e.g. 1.16.2
+    validations:
+      required: true
+
+  - type: input
+    id: kiro-cli-version
+    attributes:
+      label: kiro-cli version
+      description: Output of `kiro-cli --version`.
+      placeholder: e.g. 2.4.0
+    validations:
+      required: true
+
+  - type: input
+    id: plugin-version
+    attributes:
+      label: opencode-kiro (plugin) version
+      description: The installed version of this plugin.
+      placeholder: e.g. 0.3.6
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: OS / platform
+      description: Operating system and version.
+      placeholder: e.g. macOS 15.1, Ubuntu 24.04, Windows 11
+    validations:
+      required: true
