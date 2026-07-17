@@ -114,22 +114,60 @@ const server = async (input: PluginInput): Promise<Hooks> => {
     },
     provider: {
       id: "kiro",
-      // inject per-model reasoning-effort variants (consumed as providerOptions.kiro.reasoningEffort)
+      // expose the exact runtime/models.dev intersection with catalog metadata intact
       async models(provider, ctx) {
-        // auth-gate: don't load the SDK or inject variants until the user is authed with kiro
+        // auth-gate: don't load the SDK or start discovery until the user is authed with kiro
         if (!ctx.auth) return provider.models
-        const { reasoningEffortsFor } = await import("kiro-acp-ai-provider")
-        for (const model of Object.values(provider.models)) {
-          // guard the api.id deref: a malformed catalog entry must not fail registration
-          const apiId = model.api?.id
-          if (!apiId) continue
-          const levels = reasoningEffortsFor(apiId)
-          if (levels.length === 0) continue // non-effort models: no variants
-          model.variants = Object.fromEntries(
-            levels.map((level) => [level, { reasoningEffort: level }]),
-          )
+
+        try {
+          const { listModels } = await import("kiro-acp-ai-provider")
+          const discoveredModels = await listModels({
+            cwd: input.directory ?? input.worktree,
+          })
+          const runtimeModels = new Map(discoveredModels.map((model) => [model.modelId, model]))
+          if (runtimeModels.size !== discoveredModels.length) return provider.models
+
+          const models: typeof provider.models = {}
+          for (const [catalogKey, catalogModel] of Object.entries(provider.models)) {
+            const apiId = catalogModel.api?.id
+            if (typeof apiId !== "string") continue
+
+            const runtimeModel = runtimeModels.get(apiId)
+            if (!runtimeModel) continue
+            if (runtimeModel.runtimeEfforts.length === 0) {
+              models[catalogKey] = catalogModel
+              continue
+            }
+
+            models[catalogKey] = {
+              ...catalogModel,
+              ...(runtimeModel.baselineEffort === undefined
+                ? {}
+                : {
+                    options: {
+                      ...catalogModel.options,
+                      reasoningEffort: runtimeModel.baselineEffort,
+                    },
+                  }),
+              variants: {
+                ...catalogModel.variants,
+                ...Object.fromEntries(
+                  runtimeModel.runtimeEfforts.map((effort) => [
+                    effort,
+                    {
+                      ...catalogModel.variants?.[effort],
+                      reasoningEffort: effort,
+                    },
+                  ]),
+                ),
+              },
+            }
+          }
+
+          return models
+        } catch {
+          return provider.models
         }
-        return provider.models
       },
     },
   }

@@ -125,11 +125,13 @@ If the flow times out, authenticate directly with kiro-cli (`kiro-cli login`) an
 
 ## Models
 
-This plugin supports all models in the US region, defined in the [models.dev](https://models.dev) `kiro`
-catalog entry. opencode loads them from there. List them with:
+After authentication, the plugin exposes the exact, case-sensitive intersection of Kiro's runtime `modelId` values and the models.dev catalog's `model.api.id` values. The runtime `listModels()` result is authoritative: `runtimeEfforts` is always an array, an empty array leaves the matching catalog model unchanged, and nonempty arrays merge exact effort variants into the catalog. Existing variant metadata survives key collisions while the runtime effort sets `reasoningEffort`; an optional runtime `baselineEffort` sets the model's base effort. Successful discovery keeps every matching catalog key and all other metadata while omitting runtime-only and catalog-only IDs. A discovery exception or duplicate runtime ID preserves the exact original catalog unchanged.
+
+List the resulting models with:
+
 ```bash
-opencode models           # lists kiro/auto, kiro/claude-opus-4.8, ...
-opencode run -m kiro/auto "hello"
+opencode models
+opencode run -m kiro/<exact-model-id> "hello"
 ```
 
 Image input is capability-driven: paste an image path into the TUI prompt and
@@ -139,13 +141,9 @@ image-capable models receive it as an attachment.
 
 Effort-capable models expose a reasoning-effort toggle: cycle it in opencode with the
 **Cycle model variants** action (default keybind `ctrl+t`). It is **per model**, showing
-each family's native levels:
+each family's native levels.
 
-- `claude-opus-4.8`, `claude-opus-4.7`: low / medium / high / xhigh / max
-- `claude-opus-4.6`, `claude-sonnet-4.6`: low / medium / high / max
-
-Models without effort control (opus-4.5, sonnet-4.5, haiku, deepseek, glm, qwen, minimax)
-show no effort option. opencode's **Default** (unset) returns the model to its native
+Models without effort control show no effort option. opencode's **Default** (unset) returns the model to its native
 default effort. No config is required: the plugin's `provider.models` hook supplies the
 variants automatically and the chosen level flows to the SDK as
 `providerOptions.kiro.reasoningEffort`. Kiro cannot disable thinking, so even the lowest
@@ -203,9 +201,10 @@ would require opencode core changes and is intentionally out of scope for this p
 
 ## How it works
 
-- **Provider & models (models.dev)**: opencode loads the `kiro` provider and its full
-  model list from the models.dev catalog. This plugin does **not** define any provider or
-  model config of its own; there is no `config` hook.
+- **Provider metadata and runtime models**: opencode loads the `kiro` provider and model
+  metadata from models.dev. After auth, this plugin keeps only exact catalog/runtime ID
+  matches, preserves catalog metadata, and projects the runtime-authoritative effort
+  options; a discovery exception or duplicate runtime ID keeps the input catalog unchanged.
 - **SDK resolution (resolveSDK)**: opencode reads the catalog's `npm` field
   (`kiro-acp-ai-provider`), installs that package into its package cache on first model
   use, and imports it. This plugin's `auth` loader supplies the provider options
@@ -234,7 +233,6 @@ would require opencode core changes and is intentionally out of scope for this p
 | No credits line / credits stay 0 | Credits appear after the first **completed** kiro turn; cancelled turns and turns without usage metadata contribute nothing. Check the TUI plugin is `active` in the Plugins dialog (and listed in `tui.json`). |
 | Credits box never appears (even with `tui.json` configured correctly) | The TUI credits box renders only when `opencode-kiro` is resolvable in opencode's package cache. If the package is missing from the cache the box silently does not appear. Fix: ensure `opencode-kiro` is installed so it resolves in the cache. Do **not** manually clear the package cache: clearing can trigger a flaky on-demand refetch that fails with an "unknown git error". |
 | `kiro` provider not showing in `opencode models` | The provider comes from the models.dev catalog, not this plugin. Ensure your opencode version ships a catalog that includes `kiro` (run `opencode models --refresh` to update the cache). For local development, point opencode at a kiro-inclusive catalog via `OPENCODE_MODELS_PATH=/path/to/api.json` (see [Local development](#local-development-path-source)). |
-| `sdk.languageModel is not a function` | A stale `kiro-acp-ai-provider` from before the 2.0.x line resolved from opencode's package cache. Remove the cached copy (`$XDG_CACHE_HOME/opencode/packages/kiro-acp-ai-provider`, default `~/.cache/opencode/packages/...`) and retry; the factory auto-discovery clash was fixed in the 2.0.x line, and this plugin currently pins 2.1.0. |
 | Path install rejected (`must export id`) | Run `npm run build` in your checkout first and reference the repo root (both entry modules export ids). |
 | Provider visible but runs fail | The provider is selectable (from the catalog) before any credential exists. Run `opencode auth login` first. |
 

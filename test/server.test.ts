@@ -4,8 +4,7 @@ import { dirname, join } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import type { AuthHook, Config, PluginInput, ProviderHook } from "@opencode-ai/plugin"
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest"
-import { reasoningEffortsFor, verifyAuth } from "kiro-acp-ai-provider"
-import type { KiroEffortLevel } from "kiro-acp-ai-provider"
+import { listModels, verifyAuth } from "kiro-acp-ai-provider"
 import serverPlugin, { enableSidebarConfig, notifyIfTokenExpired, readToken } from "../src/server"
 
 // Auth hook contract tests. The authorize() browser/poll flow isn't unit-tested
@@ -14,13 +13,13 @@ import serverPlugin, { enableSidebarConfig, notifyIfTokenExpired, readToken } fr
 // The auth gate is kiro-cli whoami via the SDK's verifyAuth(); mock it so unit
 // tests drive logged-in / logged-out states without spawning kiro-cli or needing
 // the SDK build. readToken/notifyIfTokenExpired consume the boolean only.
-// reasoningEffortsFor is mocked too so the provider.models hook gets deterministic levels.
+// Runtime discovery is mocked so provider.models tests never spawn kiro-cli.
 vi.mock("kiro-acp-ai-provider", () => ({
   verifyAuth: vi.fn(() => ({ installed: true, authenticated: true })),
-  reasoningEffortsFor: vi.fn(() => []),
+  listModels: vi.fn(async () => []),
 }))
 const mockVerifyAuth = vi.mocked(verifyAuth)
-const mockReasoningEffortsFor = vi.mocked(reasoningEffortsFor)
+const mockListModels = vi.mocked(listModels)
 
 // authorize()'s not-authed branch spawns `kiro-cli login`; stub child_process so
 // the consent-write tests exercise the poll branch without launching a real binary.
@@ -34,9 +33,8 @@ vi.mock("node:child_process", () => ({
 beforeEach(() => {
   mockVerifyAuth.mockReset()
   mockVerifyAuth.mockReturnValue({ installed: true, authenticated: true })
-  // Default to no-effort (empty levels); the provider-hook tests override per model.
-  mockReasoningEffortsFor.mockReset()
-  mockReasoningEffortsFor.mockReturnValue([])
+  mockListModels.mockReset()
+  mockListModels.mockResolvedValue([])
 })
 
 // Isolate XDG_CONFIG_HOME (tui.json) and XDG_DATA_HOME (auth.json) for the whole
@@ -284,91 +282,197 @@ describe("config hook (kiro provider stub, gated on a stored kiro credential)", 
   })
 })
 
-// The provider.models hook injects per-model reasoning-effort variants (cycle thinking effort).
-describe("provider hook (reasoning effort variants)", () => {
+describe("provider hook (runtime catalog discovery)", () => {
   type ModelsFn = NonNullable<ProviderHook["models"]>
+  type CatalogModel = Parameters<ModelsFn>[0]["models"][string]
+  type RuntimeModel = Awaited<ReturnType<typeof listModels>>[number]
 
-  /** Minimal catalog provider for the models() hook: it only reads api.id. */
-  const modelsProvider = (...ids: string[]): Parameters<ModelsFn>[0] =>
-    ({
-      models: Object.fromEntries(ids.map((id) => [id, { api: { id } }])),
-    }) as unknown as Parameters<ModelsFn>[0]
+  const catalogModel = (
+    apiId: string,
+    overrides: Partial<CatalogModel> = {},
+  ): CatalogModel => ({
+    id: `catalog-${apiId}`,
+    providerID: "kiro",
+    api: { id: apiId, url: "https://catalog.invalid/v1", npm: "kiro-acp-ai-provider" },
+    name: `Catalog ${apiId}`,
+    family: "catalog-family",
+    capabilities: {
+      temperature: true,
+      reasoning: true,
+      attachment: true,
+      toolcall: true,
+      input: { text: true, audio: false, image: true, video: false, pdf: true },
+      output: { text: true, audio: false, image: false, video: false, pdf: false },
+      interleaved: { field: "reasoning_content" },
+    },
+    cost: { input: 1.25, output: 5, cache: { read: 0.1, write: 0.2 } },
+    limit: { context: 200_000, input: 190_000, output: 10_000 },
+    status: "active",
+    options: {},
+    headers: { "x-catalog-source": "models.dev" },
+    release_date: "2026-07-01",
+    ...overrides,
+  })
 
-  /** A present kiro credential for the hook's ctx.auth (shape irrelevant; only presence is gated). */
-  const authedCtx = { auth: { type: "oauth" } } as unknown as Parameters<ModelsFn>[1]
+  const runtimeModel = (
+    modelId: string,
+    runtimeEfforts: string[] = [],
+    baselineEffort?: string,
+  ): RuntimeModel => ({
+    modelId,
+    name: `Runtime ${modelId}`,
+    runtimeEfforts,
+    ...(baselineEffort === undefined ? {} : { baselineEffort }),
+  })
 
-  /** Run the provider.models hook against a fresh fake catalog of the given ids (authed by default). */
-  const runModels = async (...ids: string[]) => {
-    const hooks = await serverPlugin.server(makeInput({ directory: "/tmp/proj" }))
-    return hooks.provider?.models?.(modelsProvider(...ids), authedCtx)
+  const resolveRuntimeModels = (models: RuntimeModel[]): void => {
+    mockListModels.mockResolvedValue(models)
   }
 
-  test("UNAUTHED (ctx.auth undefined): returns provider.models unchanged, never loads the SDK or adds variants", async () => {
-    // The early return precedes the SDK import: an unauthed user gets the catalog
-    // back untouched (no variants), proving reasoningEffortsFor is never reached.
-    // claude-opus-4.8 would otherwise get a full variant ladder.
-    mockReasoningEffortsFor.mockReturnValue(["low", "medium", "high", "xhigh", "max"])
-    const hooks = await serverPlugin.server(makeInput({ directory: "/tmp/proj" }))
-    const provider = modelsProvider("claude-opus-4.8", "claude-sonnet-4.5")
+  const modelsProvider = (
+    models: Record<string, CatalogModel>,
+  ): Parameters<ModelsFn>[0] => ({ models }) as Parameters<ModelsFn>[0]
 
-    // No auth in ctx: the gate returns the same models object, variant-free.
+  const authedCtx = { auth: { type: "oauth" } } as unknown as Parameters<ModelsFn>[1]
+
+  const runModels = async (
+    provider: Parameters<ModelsFn>[0],
+    input: PluginInput = makeInput({ directory: "/tmp/proj" }),
+  ) => {
+    const hooks = await serverPlugin.server(input)
+    return hooks.provider?.models?.(provider, authedCtx)
+  }
+
+  test("unauthenticated calls preserve the catalog without discovery", async () => {
+    const provider = modelsProvider({ preserved: catalogModel("preserved") })
+    const hooks = await serverPlugin.server(makeInput({ directory: "/tmp/proj" }))
+
     const models = await hooks.provider?.models?.(provider, {})
 
     expect(models).toBe(provider.models)
-    expect(models?.["claude-opus-4.8"]?.variants).toBeUndefined()
-    expect(models?.["claude-sonnet-4.5"]?.variants).toBeUndefined()
-    expect("variants" in (models?.["claude-opus-4.8"] ?? {})).toBe(false)
-    // The SDK's effort lookup is never consulted pre-auth (gate precedes the import).
-    expect(mockReasoningEffortsFor).not.toHaveBeenCalled()
+    expect(mockListModels).not.toHaveBeenCalled()
   })
 
-  test("builds variants for an effort-capable model keyed by its native levels", async () => {
-    // claude-opus-4.8 exposes the full native effort ladder.
-    const levels: KiroEffortLevel[] = ["low", "medium", "high", "xhigh", "max"]
-    mockReasoningEffortsFor.mockReturnValue(levels)
+  test("authenticated calls discover once with the plugin cwd", async () => {
+    const provider = modelsProvider({ catalog: catalogModel("catalog-only") })
+    const hooks = await serverPlugin.server(
+      makeInput({ directory: "/tmp/project", worktree: "/tmp/worktree" }),
+    )
 
-    const models = await runModels("claude-opus-4.8")
+    await hooks.provider?.models?.(provider, authedCtx)
 
-    expect(models?.["claude-opus-4.8"]?.variants).toEqual({
-      low: { reasoningEffort: "low" },
-      medium: { reasoningEffort: "medium" },
-      high: { reasoningEffort: "high" },
-      xhigh: { reasoningEffort: "xhigh" },
-      max: { reasoningEffort: "max" },
+    expect(mockListModels).toHaveBeenCalledOnce()
+    expect(mockListModels).toHaveBeenCalledWith({ cwd: "/tmp/project" })
+  })
+
+  test("uses the exact case-sensitive intersection and omits unmatched IDs", async () => {
+    const exact = catalogModel("Model-ID")
+    const provider = modelsProvider({ exact, "catalog-only": catalogModel("catalog-only") })
+    resolveRuntimeModels([
+      runtimeModel("Model-ID"),
+      runtimeModel("model-id"),
+      runtimeModel("runtime-only"),
+    ])
+
+    const models = await runModels(provider)
+
+    expect(models).toEqual({ exact })
+    expect(models).not.toHaveProperty("catalog-only")
+    expect(models).not.toHaveProperty("runtime-only")
+  })
+
+  test("preserves the catalog key and metadata while enriching the exact match", async () => {
+    const catalog = catalogModel("metadata-model", {
+      id: "normalized-catalog-id",
+      name: "Authoritative Catalog Name",
+      options: { temperature: 0.25, catalogOption: "preserved" },
+      variants: {
+        existing: { reasoningEffort: "existing", temperature: 0.5 },
+        "opaque/default": { reasoningEffort: "stale", temperature: 0.9 },
+      },
     })
+    const provider = modelsProvider({ "preserved-catalog-key": catalog })
+    resolveRuntimeModels([
+      runtimeModel(
+        "metadata-model",
+        ["opaque/default", "MAX_V2"],
+        "opaque/default",
+      ),
+    ])
+
+    const models = await runModels(provider)
+    const model = models?.["preserved-catalog-key"]
+
+    expect(Object.keys(models ?? {})).toEqual(["preserved-catalog-key"])
+    expect(model).toEqual({
+      ...catalog,
+      options: {
+        temperature: 0.25,
+        catalogOption: "preserved",
+        reasoningEffort: "opaque/default",
+      },
+      variants: {
+        existing: { reasoningEffort: "existing", temperature: 0.5 },
+        "opaque/default": { reasoningEffort: "opaque/default", temperature: 0.9 },
+        MAX_V2: { reasoningEffort: "MAX_V2" },
+      },
+    })
+    expect(model?.api).toBe(catalog.api)
+    expect(model?.capabilities).toBe(catalog.capabilities)
+    expect(model?.cost).toBe(catalog.cost)
+    expect(model?.limit).toBe(catalog.limit)
+    expect(model?.name).toBe("Authoritative Catalog Name")
   })
 
-  test("uses the model's reduced native set (no xhigh) verbatim, with no remap", async () => {
-    // claude-opus-4.6 supports every native level except xhigh.
-    const levels: KiroEffortLevel[] = ["low", "medium", "high", "max"]
-    mockReasoningEffortsFor.mockReturnValue(levels)
+  test("keeps opaque runtime efforts exact without synthesizing a baseline", async () => {
+    resolveRuntimeModels([runtimeModel("effort-model", ["Future/Balanced.v2", "MAX_V2"])])
 
-    const models = await runModels("claude-opus-4.6")
-    const variants = models?.["claude-opus-4.6"]?.variants
+    const model = (await runModels(
+      modelsProvider({ effort: catalogModel("effort-model") }),
+    ))?.effort
 
-    expect(Object.keys(variants ?? {})).toEqual(levels)
-    expect("xhigh" in (variants ?? {})).toBe(false)
-    expect(variants?.high).toEqual({ reasoningEffort: "high" })
+    expect(model?.variants).toEqual({
+      "Future/Balanced.v2": { reasoningEffort: "Future/Balanced.v2" },
+      MAX_V2: { reasoningEffort: "MAX_V2" },
+    })
+    expect(model?.options.reasoningEffort).toBeUndefined()
   })
 
-  test("leaves a non-effort model without a variants key", async () => {
-    // claude-sonnet-4.5 has no effort control: reasoningEffortsFor returns [].
-    mockReasoningEffortsFor.mockReturnValue([])
+  test("treats empty runtime efforts as authoritative", async () => {
+    const catalog = catalogModel("no-runtime-effort-model", {
+      options: { temperature: 0.7 },
+      variants: { existing: { reasoningEffort: "existing", temperature: 0.5 } },
+    })
+    resolveRuntimeModels([runtimeModel("no-runtime-effort-model")])
 
-    const models = await runModels("claude-sonnet-4.5")
-    const model = models?.["claude-sonnet-4.5"]
+    const model = (await runModels(modelsProvider({ matched: catalog })))?.matched
 
-    expect(model?.variants).toBeUndefined()
-    expect("variants" in (model ?? {})).toBe(false)
+    expect(model).toBe(catalog)
   })
 
-  test("exposes a provider hook with id kiro alongside the unchanged auth hook", async () => {
-    const hooks = await serverPlugin.server(makeInput({ directory: "/tmp/proj" }))
+  test("fails open to the exact original catalog for duplicate runtime IDs", async () => {
+    const catalog = catalogModel("preserved", {
+      options: { catalogOption: "preserved" },
+      variants: { existing: { reasoningEffort: "existing" } },
+    })
+    const provider = modelsProvider({ preserved: catalog })
+    resolveRuntimeModels([runtimeModel("duplicate"), runtimeModel("duplicate")])
 
-    // The provider hook is additive: it coexists with the (unchanged) auth hook.
-    expect(hooks.provider?.id).toBe("kiro")
-    expect(typeof hooks.provider?.models).toBe("function")
-    expect(hooks.auth?.provider).toBe("kiro")
+    const models = await runModels(provider)
+
+    expect(models).toBe(provider.models)
+    expect(models?.preserved).toBe(catalog)
+  })
+
+  test("fails open to the exact original catalog when discovery throws", async () => {
+    const catalog = catalogModel("preserved")
+    const provider = modelsProvider({ preserved: catalog })
+    mockListModels.mockRejectedValue(new Error("discovery failed"))
+
+    const models = await runModels(provider)
+
+    expect(models).toBe(provider.models)
+    expect(models?.preserved).toBe(catalog)
   })
 })
 

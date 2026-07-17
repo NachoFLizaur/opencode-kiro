@@ -33,6 +33,8 @@ npm run typecheck   # tsc --noEmit
 
 Run `npm run typecheck` and `npm test` before opening a PR. All tests must pass.
 
+Runtime model discovery changes must treat the SDK's normalized `runtimeEfforts` and optional `baselineEffort` as authoritative, keep the exact, case-sensitive runtime `modelId` to catalog `model.api.id` intersection, preserve matching catalog keys and metadata, and omit unmatched IDs after success. A thrown discovery or duplicate runtime ID must fail open to the original catalog unchanged; add focused coverage to the existing server test file.
+
 ## Running the plugin locally against opencode
 
 Build first, then point opencode at your checkout by absolute path in both config files (`opencode.json` and `tui.json`), in the project's `.opencode/` dir or the global `~/.config/opencode/`:
@@ -69,7 +71,7 @@ opencode does not run your working copy directly. It resolves plugins from its p
 
 ## Verifying in a clean-room sandbox
 
-To exercise auth, the model picker, reasoning effort, and the credits display without touching your real opencode config or first-run state, run opencode against an isolated XDG sandbox while keeping your real `HOME` (the `kiro-cli` login and its SSO token live under `~/.aws`, not under XDG, so they keep working):
+To exercise auth, runtime model and reasoning-effort discovery, and the credits display without touching your real opencode config or first-run state, run opencode against an isolated XDG sandbox while keeping your real `HOME` (the `kiro-cli` login and its SSO token live under `~/.aws`, not under XDG, so they keep working):
 
 ```bash
 SANDBOX="$(mktemp -d)"
@@ -79,15 +81,16 @@ export XDG_STATE_HOME="$SANDBOX/state"
 export XDG_CACHE_HOME="$SANDBOX/cache"
 mkdir -p "$XDG_CONFIG_HOME/opencode"
 
-# Point opencode at a catalog that includes the kiro provider if needed.
-export OPENCODE_MODELS_PATH=/path/to/models.dev/packages/web/dist/_api.json
+# Set these placeholders to absolute paths for your local checkouts.
+export OPENCODE_KIRO_ROOT="/absolute/path/to/opencode-kiro"
+export OPENCODE_MODELS_PATH="/absolute/path/to/models.dev/packages/web/dist/_api.json"
 
-# Load the plugin by path (avoids cache indirection). The credits box and chip
-# also require the plugin to be listed in tui.json.
-echo '{"plugin":["/abs/path/to/opencode-kiro"]}' > "$XDG_CONFIG_HOME/opencode/tui.json"
+# Load the plugin by absolute path (avoids cache indirection). The credits box
+# and chip also require the plugin to be listed in tui.json.
+printf '{"plugin":["%s"]}\n' "$OPENCODE_KIRO_ROOT" > "$XDG_CONFIG_HOME/opencode/tui.json"
 ```
 
-Then build a standalone opencode and run it against the sandbox. Because `HOME` is untouched, `kiro-cli` auth still works; because XDG is sandboxed, opencode starts from a fresh, empty config, so you can verify first-run behavior (consent prompt, no stored credential, model gating).
+Then build a standalone opencode and run it against the sandbox. Because `HOME` is untouched, `kiro-cli` auth still works; because XDG is sandboxed, opencode starts from a fresh, empty config, so you can verify first-run behavior (consent prompt, no stored credential, auth-gated runtime model discovery).
 
 Notes for macOS:
 
