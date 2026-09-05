@@ -11,6 +11,20 @@ stability promise: it may break when OpenCode's v2 branch moves. OpenCode v1 use
 stay on `opencode-kiro@0.4.0` (the `main` branch / npm `latest` line). No OpenCode v2
 release date is known or claimed here. Current pins: [docs/COMPATIBILITY.md](./docs/COMPATIBILITY.md).
 
+## [Unreleased]
+
+### Fixed
+
+- **`limit.context` now follows the live Kiro lineup.** kiro-cli reports no
+  structured limits over ACP, but its model descriptions state the window as prose
+  ("Claude Opus 4.8 model with 1M context window"). Discovery now parses that value
+  and applies it to `limit.context` on both catalog paths (models.dev intersection
+  and runtime-only self-registration), and the same value feeds the SDK's
+  `contextWindows` setting. Previously every self-registered model kept the host
+  default (200k), so 1M-window models compacted far too early and the SDK was handed
+  a wrong window. Models whose description states no window are left untouched;
+  `limit.output` is never derived (the description never states it).
+
 ## [0.5.0-beta.5] - 2026-09-04
 
 Supersedes 0.5.0-beta.4 at the same tested OpenCode commit. This release makes model

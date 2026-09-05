@@ -8,6 +8,7 @@ import type { AuthStatus, ModelWithEfforts } from "kiro-acp-ai-provider"
 import { createKiroAcp, listModels, verifyAuthAsync } from "kiro-acp-ai-provider"
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest"
 import serverPlugin from "../src/server"
+import { parseContextWindow } from "../src/server/discovery"
 
 // Server plugin behavior suite. Everything is driven through
 // `serverPlugin.setup(mockContext)` plus module mocks — never through module
@@ -834,6 +835,85 @@ describe("discovery: catalog transform + runtime model lifecycle", () => {
 
     const settings = catalog.providers.get("kiro")!.provider.settings
     expect(settings.contextWindows).toEqual({ "claude-sonnet-4.6": 200_000 })
+    await cleanup()
+  })
+
+  // -------------------------------------------------------------------------
+  // context window from the live description
+  // -------------------------------------------------------------------------
+
+  test("parseContextWindow reads k/M windows out of kiro-cli descriptions", () => {
+    expect(parseContextWindow("Claude Opus 4.8 model with 1M context window")).toBe(1_000_000)
+    expect(parseContextWindow("Experimental preview of OpenAI GPT 5.6 Sol with 272k context window")).toBe(272_000)
+    expect(parseContextWindow("Experimental preview with 1.5M context window")).toBe(1_500_000)
+    expect(parseContextWindow("200K context window")).toBe(200_000)
+  })
+
+  test("parseContextWindow returns undefined when no window is stated", () => {
+    expect(parseContextWindow(undefined)).toBeUndefined()
+    expect(parseContextWindow("")).toBeUndefined()
+    expect(parseContextWindow("Claude Opus 4.5 model")).toBeUndefined()
+    expect(parseContextWindow("Hybrid reasoning and coding for regular use")).toBeUndefined()
+    // number without a k/M unit, or number and "context" in different sentences
+    expect(parseContextWindow("Supports 200000 tokens of context")).toBeUndefined()
+    expect(parseContextWindow("Trained on 1M examples. Optimized for long context")).toBeUndefined()
+    expect(parseContextWindow("0k context window")).toBeUndefined()
+    // a window stated in a later sentence still counts
+    expect(parseContextWindow("Fast model. 1M context window")).toBe(1_000_000)
+  })
+
+  test("fallback self-registration takes limit.context from the description and feeds contextWindows", async () => {
+    const h = makeMockContext()
+    h.active.mockResolvedValue({ integrationID: "kiro" })
+    mockListModels.mockResolvedValue([
+      runtime("claude-opus-4.8", { description: "Claude Opus 4.8 model with 1M context window" }),
+      runtime("gpt-5.6-sol", { description: "Experimental preview of GPT 5.6 Sol with 272k context window" }),
+      runtime("claude-opus-4.5", { description: "Claude Opus 4.5 model" }),
+      runtime("no-description"),
+    ])
+    const cleanup = await runSetup(h)
+    await flush()
+
+    const catalog = makeCatalogDraft() // no models.dev Kiro entry
+    h.catalogTransform(catalog.draft)
+
+    const record = catalog.providers.get("kiro")!
+    expect(record.models.get("claude-opus-4.8")!.limit).toEqual({ context: 1_000_000, output: 0 })
+    expect(record.models.get("gpt-5.6-sol")!.limit).toEqual({ context: 272_000, output: 0 })
+    // no window stated: the draft's limit is left untouched
+    expect(record.models.get("claude-opus-4.5")!.limit).toEqual({ context: 0, output: 0 })
+    expect(record.models.get("no-description")!.limit).toEqual({ context: 0, output: 0 })
+    expect(record.provider.settings.contextWindows).toEqual({
+      "claude-opus-4.8": 1_000_000,
+      "gpt-5.6-sol": 272_000,
+    })
+    await cleanup()
+  })
+
+  test("rich catalog entry: description overrides limit.context but preserves limit.output", async () => {
+    const h = makeMockContext()
+    h.active.mockResolvedValue({ integrationID: "kiro" })
+    mockListModels.mockResolvedValue([
+      runtime("claude-sonnet-4.6", { description: "Claude Sonnet 4.6 model with 1M context window" }),
+      runtime("claude-haiku-4.5", { description: "The latest Claude Haiku model" }),
+    ])
+    const cleanup = await runSetup(h)
+    await flush()
+
+    const catalog = makeCatalogDraft()
+    seedRichKiro(catalog, [
+      { key: "claude-sonnet-4.6", modelID: "claude-sonnet-4.6", limit: { context: 200_000, output: 64_000 } },
+      { key: "claude-haiku-4.5", modelID: "claude-haiku-4.5", limit: { context: 200_000, output: 64_000 } },
+    ])
+    h.catalogTransform(catalog.draft)
+
+    const record = catalog.providers.get("kiro")!
+    expect(record.models.get("claude-sonnet-4.6")!.limit).toEqual({ context: 1_000_000, output: 64_000 })
+    expect(record.models.get("claude-haiku-4.5")!.limit).toEqual({ context: 200_000, output: 64_000 })
+    expect(record.provider.settings.contextWindows).toEqual({
+      "claude-sonnet-4.6": 1_000_000,
+      "claude-haiku-4.5": 200_000,
+    })
     await cleanup()
   })
 })

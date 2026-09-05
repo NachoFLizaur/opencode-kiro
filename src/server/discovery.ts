@@ -139,6 +139,38 @@ function effortSettings(effort: string): { effort: string } {
   return { effort } satisfies Pick<KiroACPProviderSettings, "effort">
 }
 
+// context window from the runtime description. kiro-cli reports no structured
+// limits over ACP, but its model descriptions embed the window as prose
+// ("Claude Opus 4.8 model with 1M context window", "... with 272k context
+// window"). The match is deliberately narrow: a number, a k/M unit, and the
+// word "context" later in the same sentence. Anything else (no description,
+// no unit, a window mentioned in a later sentence) yields undefined and the
+// caller leaves `model.limit` untouched, so models.dev metadata or the host
+// default still apply. Only `limit.context` is derived: the description never
+// states an output limit and none is invented.
+const CONTEXT_WINDOW = /(\d+(?:\.\d+)?)\s*([kKmM])\b[^.]*\bcontext\b/
+
+export function parseContextWindow(description: string | undefined): number | undefined {
+  if (description === undefined || description === "") return undefined
+  const match = CONTEXT_WINDOW.exec(description)
+  if (match === null) return undefined
+  const value = Number(match[1])
+  if (!Number.isFinite(value) || value <= 0) return undefined
+  const scale = match[2].toLowerCase() === "m" ? 1_000_000 : 1_000
+  return Math.round(value * scale)
+}
+
+// `limit.context` from the live description wins over whatever the draft
+// carries (models.dev value or host default): Kiro caps some models below
+// their native-provider windows and above the host default, and the live
+// description is the only source that reflects the account's actual runtime.
+// `limit.output` is preserved as-is (no live source).
+function applyContextWindow(model: MutableModel, runtimeModel: ModelWithEfforts): void {
+  const context = parseContextWindow(runtimeModel.description)
+  if (context === undefined) return
+  model.limit = { ...model.limit, context }
+}
+
 function applyEfforts(model: MutableModel, runtimeModel: ModelWithEfforts): void {
   if (runtimeModel.runtimeEfforts.length === 0) return
 
@@ -162,8 +194,10 @@ function applyEfforts(model: MutableModel, runtimeModel: ModelWithEfforts): void
 // synchronous catalog transform body. Reads only the captured snapshot:
 // - empty/undefined snapshot → catalog left untouched (fail open)
 // - rich models.dev Kiro entry → exact case-sensitive intersection of catalog
-//   `Model.Info.modelID` against runtime `modelId`, metadata preserved
-// - no rich entry → minimal self-registration of only runtime-returned models
+//   `Model.Info.modelID` against runtime `modelId`, metadata preserved except
+//   `limit.context`, which the live description overrides when it states one
+// - no rich entry → minimal self-registration of only runtime-returned models,
+//   with `limit.context` from the live description when it states one
 // Provider settings carry the deterministic SDK factory inputs that become
 // `event.options` for the aisdk hooks; `contextWindows` is keyed by the API
 // model ID (`Model.Info.modelID`), not the catalog key. `agent`, `mcpTimeout`
@@ -194,6 +228,7 @@ export function applyCatalogSnapshot(draft: CatalogDraft, state: DiscoveryState)
         continue
       }
       draft.model.update(KIRO_PROVIDER_ID, catalogKey, (model) => {
+        applyContextWindow(model, runtimeModel)
         applyEfforts(model, runtimeModel)
         if (model.limit.context > 0) contextWindows[asString(model.modelID)] = model.limit.context
       })
@@ -205,6 +240,7 @@ export function applyCatalogSnapshot(draft: CatalogDraft, state: DiscoveryState)
       draft.model.update(KIRO_PROVIDER_ID, runtimeModel.modelId, (model) => {
         model.name = runtimeModel.name || runtimeModel.modelId
         model.modelID = runtimeModel.modelId as Model.ID
+        applyContextWindow(model, runtimeModel)
         applyEfforts(model, runtimeModel)
         if (model.limit.context > 0) contextWindows[asString(model.modelID)] = model.limit.context
       })
