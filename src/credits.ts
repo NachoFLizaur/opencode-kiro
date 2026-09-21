@@ -8,7 +8,8 @@ export type CreditPart = object
 /** Minimal message shape; SDK `Message` is assignable. */
 export interface CreditMessage {
   readonly id: string
-  readonly role: string
+  readonly role?: string
+  readonly type?: string
 }
 
 /** One part's credit metadata: the turn total plus the SDK-reported unit. */
@@ -68,7 +69,7 @@ export function sumSessionCredits(
   partsByMessage: (messageID: string) => ReadonlyArray<CreditPart>,
 ): SessionCredits {
   return messages
-    .filter((message) => message.role === "assistant")
+    .filter((message) => message.role === "assistant" || message.type === "assistant")
     .reduce<SessionCredits>(
       (acc, message) => {
         const hit = messageCredits(partsByMessage(message.id))

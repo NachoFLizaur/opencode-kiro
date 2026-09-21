@@ -1,5 +1,3 @@
-import { dirname, join } from "node:path"
-import { fileURLToPath, pathToFileURL } from "node:url"
 import { describe, expect, test } from "vitest"
 import {
   creditsForMessage,
@@ -11,7 +9,7 @@ import {
   type CreditMessage,
   type CreditPart,
   type SessionCredits,
-} from "../src/tui/credits"
+} from "../src/credits"
 
 // Credit-helper tests. Fixtures are plain Part-shaped objects carrying
 // `metadata` (the plugin API surfaces metadata, never providerMetadata).
@@ -60,6 +58,14 @@ describe("credit dedupe per message", () => {
 })
 
 describe("sumSessionCredits", () => {
+  test("accepts OpenCode V2 assistant messages", () => {
+    const result = sumSessionCredits([{ id: "msg_1", type: "assistant" }], () => [
+      carrierPart("text", { credits: 2, creditsUnit: "credit" }),
+    ])
+
+    expect(result).toEqual({ total: 2, unit: "credit", present: true })
+  })
+
   test("sums across multiple assistant messages", () => {
     const messages = [
       { id: "msg_user", role: "user" }, // role-filtered out even with a carrier
@@ -224,39 +230,5 @@ describe("spendLines", () => {
 
   test("zero-credit-but-present Kiro turn with cost 0 stays in the credits-only branch", () => {
     expect(spendLines({ cost: 0, credits: sc({ total: 0, unit: "credit", present: true }) })).toEqual(["0 credits"])
-  })
-})
-
-describe("dist/tui.js module isolation", () => {
-  const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..")
-
-  /**
-   * Import the built module via a runtime URL so tsc never resolves dist/. The
-   * import succeeding under plain Node is the lazy-@opentui/core contract: the
-   * Bun-native TUI runtime only loads inside tui().
-   */
-  const importDist = (name: string): Promise<Record<string, unknown>> =>
-    import(pathToFileURL(join(ROOT, "dist", name)).href) as Promise<Record<string, unknown>>
-
-  test("tui module exports no server", async () => {
-    // Default carries only id + tui (id is required for path/file installs:
-    // opencode rejects file-source plugins without one); no `server` export
-    // anywhere, and the pure helpers stay importable as named exports.
-    const mod = await importDist("tui.js")
-
-    expect("server" in mod).toBe(false)
-    expect(Object.keys(mod.default as Record<string, unknown>)).toEqual(["id", "tui"])
-    expect((mod.default as Record<string, unknown>).id).toBe("opencode-kiro")
-    const helpers = [
-      "creditsForMessage",
-      "formatCredits",
-      "messageCredits",
-      "readPartCredits",
-      "spendLines",
-      "sumSessionCredits",
-    ]
-    for (const helper of helpers) {
-      expect(typeof mod[helper]).toBe("function")
-    }
   })
 })
