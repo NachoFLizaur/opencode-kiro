@@ -1,7 +1,7 @@
 {
   "name": "opencode-kiro",
   "version": "0.4.0",
-  "description": "The ACP-compliant Kiro plugin for opencode: auth via the official kiro-cli login, the live Kiro model lineup through the Agent Client Protocol, and TUI credits display",
+  "description": "OpenCode V2 plugin for Kiro ACP runtime settings and terminal credit usage",
   "license": "MIT",
   "author": "Nacho F. Lizaur (https://github.com/NachoFLizaur)",
   "repository": {
@@ -14,9 +14,9 @@
   "homepage": "https://github.com/NachoFLizaur/opencode-kiro#readme",
   "type": "module",
   "exports": {
-    "./server": {
-      "types": "./dist/server.d.ts",
-      "default": "./dist/server.js"
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
     },
     "./tui": {
       "types": "./dist/tui.d.ts",
@@ -25,7 +25,9 @@
     "./package.json": "./package.json"
   },
   "files": [
-    "dist"
+    "dist",
+    "index.js",
+    "tui.js"
   ],
   "scripts": {
     "build": "tsup",
@@ -37,17 +39,19 @@
   },
   "engines": {
     "node": ">=20",
-    "opencode": ">=1.16.0"
+    "opencode": ">=2.0.0"
   },
   "peerDependencies": {
-    "@opencode-ai/plugin": "*"
+    "@opencode/plugin": ">=2.0.0"
   },
   "dependencies": {
     "kiro-acp-ai-provider": "3.0.0"
   },
   "devDependencies": {
-    "@opencode-ai/plugin": "1.16.2",
-    "@opentui/solid": "^0.3.4",
+    "@opencode/plugin": "^2.0.12",
+    "@opencode/theme": "^2.0.12",
+    "@opentui/core": "^0.5.11",
+    "@opentui/solid": "^0.5.11",
     "@types/node": "^20.19.42",
     "solid-js": "^1.9.12",
     "tsup": "^8.0.0",
