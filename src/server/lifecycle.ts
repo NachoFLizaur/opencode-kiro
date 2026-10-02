@@ -12,7 +12,7 @@
 // - loginChild / pollTimer / cancelPoll     -> auth
 // - ownedSdks                               -> aisdk
 // - disposers                               -> registration disposers, in order
-import type { Plugin } from "@opencode-ai/plugin"
+import type { Plugin } from "@opencode/plugin"
 import { type AisdkResources, createAisdkResources } from "./aisdk.js"
 import { type AuthResources, createAuthResources } from "./auth.js"
 import { type DiscoveryResources, createDiscoveryResources } from "./discovery.js"

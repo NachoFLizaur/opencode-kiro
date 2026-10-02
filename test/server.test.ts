@@ -3,7 +3,7 @@ import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { execFile } from "node:child_process"
-import type { Plugin } from "@opencode-ai/plugin"
+import type { Plugin } from "@opencode/plugin"
 import type { AuthStatus, ModelWithEfforts } from "kiro-acp-ai-provider"
 import { createKiroAcp, listModels, verifyAuthAsync } from "kiro-acp-ai-provider"
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest"
@@ -136,9 +136,9 @@ type CatalogProviderRecord = {
 }
 
 /**
- * Hand-built CatalogDraft mock. `provider.get` never upserts (matches the
- * installed d.ts contract the transform relies on to detect a rich models.dev
- * entry); `provider.update`/`model.update` initialize missing records.
+ * Hand-built ProviderEditor mock matching the OpenCode 2.0 contract: `get`
+ * never upserts, `update`/`models.update` only touch existing records, and
+ * `add`/`models.set` publish a provider's models.
  */
 function makeCatalogDraft() {
   const providers = new Map<string, CatalogProviderRecord>()
@@ -166,25 +166,34 @@ function makeCatalogDraft() {
     return model
   }
   const draft = {
-    provider: {
-      list: () => [...providers.values()],
-      get: (providerID: string) => providers.get(providerID),
-      update(providerID: string, update: (provider: unknown) => void) {
-        update(ensureProvider(providerID).provider)
-      },
-      remove(providerID: string) {
-        providers.delete(providerID)
-      },
+    list: () => [...providers.values()],
+    get: (providerID: string) => providers.get(providerID),
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    add(input: { info: any; models: readonly MutableCatalogModel[] }) {
+      providers.set(input.info.id, {
+        provider: { settings: {}, ...input.info },
+        models: new Map(input.models.map((model) => [model.id, model])),
+      })
     },
-    model: {
-      get: (providerID: string, modelID: string) => providers.get(providerID)?.models.get(modelID),
+    update(providerID: string, update: (provider: unknown) => void) {
+      const record = providers.get(providerID)
+      if (record !== undefined) update(record.provider)
+    },
+    remove(providerID: string) {
+      providers.delete(providerID)
+    },
+    models: {
+      set(providerID: string, models: readonly MutableCatalogModel[]) {
+        const record = providers.get(providerID)
+        if (record !== undefined) record.models = new Map(models.map((model) => [model.id, model]))
+      },
       update(providerID: string, modelID: string, update: (model: MutableCatalogModel) => void) {
-        update(ensureModel(providerID, modelID))
+        const model = providers.get(providerID)?.models.get(modelID)
+        if (model !== undefined) update(model)
       },
       remove(providerID: string, modelID: string) {
         providers.get(providerID)?.models.delete(modelID)
       },
-      default: { get: () => undefined, set: () => {} },
     },
   }
   return { draft, providers, ensureModel }
@@ -258,7 +267,7 @@ function makeMockContext(init: { options?: Record<string, unknown> } = {}) {
       list: vi.fn(async () => ({ location: { directory } })),
       connection: { active, resolve: vi.fn(async () => undefined) },
     },
-    catalog: {
+    provider: {
       transform: vi.fn(async (cb: (draft: unknown) => void) => {
         catalogTransformCb = cb
         return { dispose: disposeSpies.catalog }
@@ -1465,7 +1474,7 @@ describe("aisdk sdk hook + lifecycle", () => {
   test("setup failure runs partial cleanup over earlier registrations and rethrows", async () => {
     const h = makeMockContext()
     const bootError = new Error("catalog transform registration failed")
-    h.raw.catalog.transform.mockRejectedValue(bootError)
+    h.raw.provider.transform.mockRejectedValue(bootError)
 
     await expect(serverPlugin.setup(h.context)).rejects.toBe(bootError)
 

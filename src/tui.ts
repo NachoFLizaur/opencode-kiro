@@ -16,7 +16,7 @@
 // Types: `sessionID` is required on `sidebar.content` but optional on `prompt.footer.status`
 // (the chip is withheld when absent). `@opencode-ai/theme` is an uninstalled peer, so
 // `context.theme` tokens are feature-detected at render time.
-import type { Plugin } from "@opencode-ai/plugin/tui"
+import type { Plugin } from "@opencode/plugin/tui"
 import type { JSX } from "@opentui/solid"
 import type { CreditThemeTokens } from "./tui/credits-box-view.js"
 import type { SessionCredits } from "./tui/credits.js"

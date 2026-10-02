@@ -18,8 +18,8 @@ the tested commit is the compatibility target. Other v2 snapshots may or may not
 
 | Package | Pinned version | Where |
 |---|---|---|
-| `@opencode-ai/plugin` | `0.0.0-dev-18686` | devDependencies + peerDependencies (exact) |
-| `@opentui/solid` | `0.5.9` | dependencies (exact; bundler-external, never bundled) |
+| `@opencode/plugin` | `2.0.22` | devDependencies + peerDependencies (exact) |
+| `@opentui/solid` | `0.5.14` | dependencies (exact; bundler-external, never bundled) |
 | `solid-js` | `1.9.12` | dependencies (exact; bundler-external, never bundled) |
 | `kiro-acp-ai-provider` | `3.2.0` | dependencies (exact) |
 

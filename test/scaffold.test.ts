@@ -105,7 +105,7 @@ const makeMinimalContext = (): unknown => {
       list: async () => ({ location: { directory: ROOT } }),
       connection: { active: async () => false },
     },
-    catalog: {
+    provider: {
       transform: async () => registration,
       reload: async () => {},
     },
@@ -176,9 +176,9 @@ describe("dependency pins and installed plugin API", () => {
 
     // exact expected specifier per dependency block; no `^`/`~`/`*`, no dist-tag
     const expected: Array<[Record<string, string> | undefined, string, string]> = [
-      [pkg.devDependencies, "@opencode-ai/plugin", "0.0.0-dev-18686"],
-      [pkg.peerDependencies, "@opencode-ai/plugin", "0.0.0-dev-18686"],
-      [pkg.dependencies, "@opentui/solid", "0.5.9"],
+      [pkg.devDependencies, "@opencode/plugin", "2.0.22"],
+      [pkg.peerDependencies, "@opencode/plugin", "2.0.22"],
+      [pkg.dependencies, "@opentui/solid", "0.5.14"],
       [pkg.dependencies, "solid-js", "1.9.12"],
       [pkg.dependencies, "kiro-acp-ai-provider", "3.2.0"],
     ]
@@ -193,12 +193,12 @@ describe("dependency pins and installed plugin API", () => {
     // the plugin pin is an exact dev-channel version string (never the `dev`
     // dist-tag): the shape check plus the equality above pins the verified
     // `0.0.0-dev-18686`
-    expect(pkg.devDependencies?.["@opencode-ai/plugin"]).toMatch(/^0\.0\.0-dev-\d+$/)
+    expect(pkg.devDependencies?.["@opencode/plugin"]).toMatch(/^\d+\.\d+\.\d+$/)
   })
 
   test("installed plugin package has the current exports layout", async () => {
     const installed = JSON.parse(
-      await readFile(join(ROOT, "node_modules", "@opencode-ai", "plugin", "package.json"), "utf8"),
+      await readFile(join(ROOT, "node_modules", "@opencode", "plugin", "package.json"), "utf8"),
     ) as { exports?: Record<string, unknown> }
 
     const subpaths = Object.keys(installed.exports ?? {})
@@ -254,7 +254,7 @@ describe("module entry contracts", () => {
       // constants; any other residual mention means the host/SDK package was
       // bundled instead of left external.
       expect(residue).not.toContain("kiro-acp-ai-provider")
-      expect(residue).not.toContain("@opencode-ai/plugin")
+      expect(residue).not.toContain("@opencode/plugin")
       expect(residue).not.toContain("@opentui")
       expect(residue).not.toContain("solid-js")
     }
@@ -317,7 +317,7 @@ const nodeProbe = async (cwd: string, code: string): Promise<string> => {
 const hostSensitivePins = async (): Promise<Array<[name: string, version: string]>> => {
   const pkg = await readPkg()
   return [
-    ["@opencode-ai/plugin", pkg.devDependencies?.["@opencode-ai/plugin"] ?? ""],
+    ["@opencode/plugin", pkg.devDependencies?.["@opencode/plugin"] ?? ""],
     ["@opentui/solid", pkg.dependencies?.["@opentui/solid"] ?? ""],
     ["solid-js", pkg.dependencies?.["solid-js"] ?? ""],
     ["kiro-acp-ai-provider", pkg.dependencies?.["kiro-acp-ai-provider"] ?? ""],
@@ -380,7 +380,7 @@ describe("packaging and docs invariants", () => {
     ]
 
     // package.json is internally consistent: dev and peer pins of the plugin API match
-    expect(pkg.devDependencies?.["@opencode-ai/plugin"]).toBe(pkg.peerDependencies?.["@opencode-ai/plugin"])
+    expect(pkg.devDependencies?.["@opencode/plugin"]).toBe(pkg.peerDependencies?.["@opencode/plugin"])
 
     for (const [name, version] of pins) {
       expect(version, `${name} must be pinned in package.json`).not.toBe("")
@@ -396,9 +396,9 @@ describe("packaging and docs invariants", () => {
         }
       } else {
         // scoped check: plugin-API pin row (trailing cell text is free-form) + tested SHA
-        const pluginPin = pkg.devDependencies?.["@opencode-ai/plugin"] ?? ""
-        expect(content, `${label} row for @opencode-ai/plugin@${pluginPin}`).toContain(
-          `| \`@opencode-ai/plugin\` | \`${pluginPin}\``,
+        const pluginPin = pkg.devDependencies?.["@opencode/plugin"] ?? ""
+        expect(content, `${label} row for @opencode/plugin@${pluginPin}`).toContain(
+          `| \`@opencode/plugin\` | \`${pluginPin}\``,
         )
         expect(content, `${label} tested SHA`).toContain(TESTED_OPENCODE_SHA)
       }

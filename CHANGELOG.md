@@ -26,8 +26,8 @@ instead of leaving a spinner with nothing behind it. No re-login is needed.
 
 | Package | Pinned version | Where |
 |---|---|---|
-| `@opencode-ai/plugin` | `0.0.0-dev-18686` | devDependencies + peerDependencies (exact; the dev channel is the live v2 channel, pinned by exact version string, never by dist-tag; unchanged from beta.4) |
-| `@opentui/solid` | `0.5.9` | dependencies (exact; sole published version satisfying the `>=0.5.9` peer floor; bundler-external, never bundled; unchanged) |
+| `@opencode/plugin` | `2.0.22` | devDependencies + peerDependencies (exact; moved from the `@opencode-ai/plugin` dev channel, whose `context.catalog` API OpenCode 2.0.22 removed) |
+| `@opentui/solid` | `0.5.14` | dependencies (exact; satisfies the `>=0.5.14` peer floor of `@opencode/plugin@2.0.22`; bundler-external, never bundled) |
 | `solid-js` | `1.9.12` | dependencies (exact; `@opentui/solid@0.5.9` peers this exactly; bundler-external, never bundled; unchanged) |
 | `kiro-acp-ai-provider` | `3.2.0` | dependencies (exact; moved from `3.1.0`) |
 

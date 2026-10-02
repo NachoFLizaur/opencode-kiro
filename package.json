@@ -42,19 +42,19 @@
     "tag": "beta"
   },
   "peerDependencies": {
-    "@opencode-ai/plugin": "0.0.0-dev-18686"
+    "@opencode/plugin": "2.0.22"
   },
   "dependencies": {
-    "@opentui/solid": "0.5.9",
+    "@opentui/solid": "0.5.14",
     "kiro-acp-ai-provider": "3.2.0",
     "solid-js": "1.9.12"
   },
   "devDependencies": {
-    "@opencode-ai/plugin": "0.0.0-dev-18686",
     "@types/node": "^20.19.42",
     "tsup": "^8.0.0",
     "typescript": "^5.7.0",
-    "vitest": "^4.1.8"
+    "vitest": "^4.1.8",
+    "@opencode/plugin": "2.0.22"
   },
   "keywords": [
     "opencode",

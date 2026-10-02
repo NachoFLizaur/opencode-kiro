@@ -5,7 +5,7 @@
 // Installed-types note: `@opencode-ai/plugin` (root promise export) namespaces its
 // types as `Plugin.Plugin` / `Plugin.Context` / `Plugin.Cleanup` via
 // `export * as Plugin from "./plugin.js"`.
-import type { Plugin } from "@opencode-ai/plugin"
+import type { Plugin } from "@opencode/plugin"
 import { registerAisdkHook } from "./server/aisdk.js"
 import { registerAuth } from "./server/auth.js"
 import { type KiroPluginOptions, registerDiscovery } from "./server/discovery.js"
@@ -61,7 +61,7 @@ function resolveStall(raw: unknown): KiroPluginOptions["stall"] {
 // over the disposers registered so far (no leaked registrations) and the
 // original setup error is rethrown; cleanup failures during that unwind are
 // swallowed so they cannot mask it.
-const plugin: Plugin.Plugin = {
+const plugin: Plugin.Plugin & { tui: boolean } = {
   id: "kiro",
   // tui: true (dist/promise/plugin.d.ts) — the host auto-loads this
   // package's `./tui` entrypoint for npm-channel installs (single config entry)

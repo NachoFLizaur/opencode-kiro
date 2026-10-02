@@ -10,7 +10,7 @@
 // through the `language` hook's `languageModel(id, { effort })` override. Every
 // owned instance is `shutdown()` exactly once from the aggregated cleanup.
 // The SDK import stays lazy so dist/server.js loads under plain Node.
-import type { Model, Plugin } from "@opencode-ai/plugin"
+import type { Model, Plugin } from "@opencode/plugin"
 import type { KiroACPModelOverrides, KiroACPProvider, KiroACPProviderSettings } from "kiro-acp-ai-provider"
 // NAMED import on purpose: esbuild converts top-level JSON properties into
 // named exports and tree-shakes the rest, so dist/server.js inlines only the

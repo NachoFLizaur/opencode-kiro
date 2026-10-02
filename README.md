@@ -36,7 +36,7 @@ This prerelease is built and tested against **one pinned OpenCode v2 snapshot**:
 | Item | Value |
 |---|---|
 | Tested OpenCode commit (`upstream/v2` head, 2026-08-29) | `8ba434b5973856b2f32b8cd3543e154b25c413e6` |
-| `@opencode-ai/plugin` | `0.0.0-dev-18686` (exact) |
+| `@opencode/plugin` | `2.0.22` (exact) |
 | Package version | `0.5.0-beta.5` |
 
 Full pin table and verification steps: [docs/COMPATIBILITY.md](./docs/COMPATIBILITY.md).

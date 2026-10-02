@@ -12,7 +12,7 @@
 //
 // The SDK import stays lazy so dist/server.js loads under plain Node without
 // touching kiro-acp-ai-provider at module import time.
-import type { Credential, Integration, Plugin } from "@opencode-ai/plugin"
+import type { Credential, Integration, Plugin } from "@opencode/plugin"
 import type { AuthStatus } from "kiro-acp-ai-provider"
 import type { ChildProcess } from "node:child_process"
 
