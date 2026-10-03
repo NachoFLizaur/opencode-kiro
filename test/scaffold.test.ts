@@ -301,6 +301,16 @@ const runNpm = async (args: string[], cwd: string): Promise<string> => {
   return stdout
 }
 
+type PackManifest = { filename: string; files: Array<{ path: string }> }
+
+/** `npm pack --json` manifest; npm 12+ keys it by package name instead of an array. */
+const parsePackManifest = (stdout: string): PackManifest => {
+  const parsed = JSON.parse(stdout) as PackManifest[] | Record<string, PackManifest>
+  const [manifest] = Array.isArray(parsed) ? parsed : Object.values(parsed)
+  if (manifest === undefined) throw new Error("npm pack --json returned no manifest")
+  return manifest
+}
+
 /**
  * Run an ESM snippet in a real child Node process with the given cwd. Bare
  * specifiers then resolve with native Node semantics from that directory —
@@ -329,7 +339,7 @@ const TESTED_OPENCODE_SHA = "8ba434b5973856b2f32b8cd3543e154b25c413e6"
 describe("packaging and docs invariants", () => {
   test("pack payload is dist-only", async () => {
     const stdout = await runNpm(["pack", "--dry-run", "--json"], ROOT)
-    const [manifest] = JSON.parse(stdout) as Array<{ filename: string; files: Array<{ path: string }> }>
+    const manifest = parsePackManifest(stdout)
     const paths = manifest.files.map((file) => file.path)
 
     // tarball name embeds the package version
@@ -626,7 +636,7 @@ describe("packed tarball entry resolution", () => {
     consumerDir = join(workDir, "consumer")
 
     const packJson = await runNpm(["pack", "--json", "--pack-destination", workDir], ROOT)
-    const [{ filename }] = JSON.parse(packJson) as Array<{ filename: string }>
+    const { filename } = parsePackManifest(packJson)
     const tarball = join(workDir, filename)
 
     await mkdir(consumerDir)
