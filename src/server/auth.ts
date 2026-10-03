@@ -12,9 +12,10 @@
 //
 // The SDK import stays lazy so dist/server.js loads under plain Node without
 // touching kiro-acp-ai-provider at module import time.
-import type { Credential, Integration, Plugin } from "@opencode-ai/plugin"
+import type { Credential, Integration, Plugin } from "@opencode/plugin"
 import type { AuthStatus } from "kiro-acp-ai-provider"
 import type { ChildProcess } from "node:child_process"
+import { type LogoutState, writeLogoutFlag } from "./logout.js"
 
 export const KIRO_INTEGRATION_ID = "kiro"
 export const KIRO_INTEGRATION_NAME = "Kiro"
@@ -105,8 +106,9 @@ type OAuthAuthorization = {
 }
 
 // poll verifyAuthAsync() every 2s for up to 120s. Resolves with the credential
-// on success; rejects on timeout with manual-login guidance; rejects with a
-// cancellation error when the plugin is disposed mid-poll.
+// on success (after reporting the authenticated observation through
+// `onAuthenticated`); rejects on timeout with manual-login guidance; rejects
+// with a cancellation error when the plugin is disposed mid-poll.
 //
 // The tick awaits the probe, so disposal (or supersession by a newer attempt)
 // can fire `cancelPoll` (rejecting the attempt) while a probe is in flight.
@@ -119,6 +121,7 @@ type OAuthAuthorization = {
 function pollForLogin(
   verifyAuth: () => Promise<AuthStatus>,
   resources: AuthResources,
+  onAuthenticated: () => void,
 ): Promise<Credential.OAuth> {
   return new Promise<Credential.OAuth>((resolve, reject) => {
     // elapsed time is measured from promise construction, so probe duration
@@ -141,6 +144,7 @@ function pollForLogin(
         // attempt as cancelled ahead of the real resolution
         resources.cancelPoll = undefined
         releaseLoginResources(resources)
+        onAuthenticated()
         resolve(kiroCredential())
         return
       }
@@ -176,7 +180,11 @@ function pollForLogin(
 //    timer, and rejects its callback with a supersession error, then spawns;
 //    `state.auth` is shared, so skipping this step would orphan the previous
 //    child (no owner → never killed) and cross-wire the two polls' fields
-async function authorize(resources: AuthResources): Promise<OAuthAuthorization> {
+//
+// Every authenticated observation (state 2 and state 4) is reported through
+// `onAuthenticated` so a logout flag raised earlier is cleared by the login
+// itself, without waiting for the next LLM step.
+async function authorize(resources: AuthResources, onAuthenticated: () => void): Promise<OAuthAuthorization> {
   // async probe only — the sync verifyAuth is never imported by the plugin
   const { verifyAuthAsync } = await import("kiro-acp-ai-provider")
   // imported up-front (not at spawn time) on purpose: the supersede check →
@@ -190,6 +198,7 @@ async function authorize(resources: AuthResources): Promise<OAuthAuthorization> 
   if (!status.installed) throw new Error(NOT_INSTALLED_MESSAGE)
 
   if (status.authenticated) {
+    onAuthenticated()
     // already-resolved: no guard needed (a resolved promise cannot leak a rejection)
     return {
       url: KIRO_DOCS_URL,
@@ -214,7 +223,7 @@ async function authorize(resources: AuthResources): Promise<OAuthAuthorization> 
     shell: process.platform === "win32",
   })
 
-  const callback = pollForLogin(verifyAuthAsync, resources)
+  const callback = pollForLogin(verifyAuthAsync, resources, onAuthenticated)
   // Guard the derived promise: an abandoned login (timeout/cancel) must not
   // surface as an unhandled rejection before the host attaches its handler.
   // The original callback is returned so the host still observes the rejection.
@@ -223,15 +232,21 @@ async function authorize(resources: AuthResources): Promise<OAuthAuthorization> 
 }
 
 // upsert Integration `kiro` with the "Kiro CLI Login" OAuth method via
-// context.integration.transform. Returns one disposer that releases any
+// context.integration.transform. The transform also publishes the logout
+// detector's stage as `metadata.kiroLoggedOut` on the kiro ref (and strips it
+// while not flagged), so a `context.integration.reload()` after a stage change
+// is all it takes to reach the TUI. Returns one disposer that releases any
 // in-flight login resources and unregisters the transform.
 export async function registerAuth(
   context: Plugin.Context,
   resources: AuthResources,
+  logout: LogoutState,
+  onAuthenticated: () => void,
 ): Promise<() => Promise<void>> {
   const registration = await context.integration.transform((draft) => {
     draft.update(KIRO_INTEGRATION_ID, (integration) => {
       integration.name = KIRO_INTEGRATION_NAME
+      writeLogoutFlag(integration, logout)
     })
     // forms shape per installed d.ts IntegrationOAuthMethodRegistration
     // (dist/promise/integration.d.ts). This flow needs no form fields, so the
@@ -243,7 +258,7 @@ export async function registerAuth(
         type: "oauth",
         label: KIRO_OAUTH_METHOD_LABEL,
       },
-      authorize: async (_answer) => authorize(resources),
+      authorize: async (_answer) => authorize(resources, onAuthenticated),
       // no refresh callback: kiro-cli owns credential storage and refresh
     })
   })

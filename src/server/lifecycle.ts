@@ -10,16 +10,19 @@
 // - cwd / snapshot / generation / inflight  -> discovery.state
 // - eventIterator / eventTask               -> discovery
 // - loginChild / pollTimer / cancelPoll     -> auth
+// - stage / memo / follow-up timer          -> logout
 // - ownedSdks                               -> aisdk
 // - disposers                               -> registration disposers, in order
-import type { Plugin } from "@opencode-ai/plugin"
+import type { Plugin } from "@opencode/plugin"
 import { type AisdkResources, createAisdkResources } from "./aisdk.js"
 import { type AuthResources, createAuthResources } from "./auth.js"
 import { type DiscoveryResources, createDiscoveryResources } from "./discovery.js"
+import { type LogoutState, createLogoutState } from "./logout.js"
 
 export interface ServerState {
   auth: AuthResources
   discovery: DiscoveryResources
+  logout: LogoutState
   aisdk: AisdkResources
   /** registration disposers pushed in setup order; cleanup runs them reversed */
   disposers: Array<() => void | Promise<void>>
@@ -32,6 +35,7 @@ export function createServerState(): ServerState {
   return {
     auth: createAuthResources(),
     discovery: createDiscoveryResources(),
+    logout: createLogoutState(),
     aisdk: createAisdkResources(),
     disposers: [],
     disposed: false,
@@ -44,9 +48,12 @@ export function createServerState(): ServerState {
 // discipline: auth (kill login child, clear poll timer, settle pending poll,
 // dispose the integration registration), discovery (final generation bump so
 // pending discoveries are discarded, stop/await the event iterator via
-// return(), await the event task, dispose the catalog transform), aisdk
-// (dispose the hook registration, shutdown() each owned provider exactly
-// once). Sub-AggregateErrors are flattened so the combined report lists every
+// return(), await the event task, dispose the provider transform), logout
+// (cancel the follow-up timer, drop in-flight probe results, dispose the
+// session hook registration), retry guard (dispose its session hook
+// registration; it holds no other resource), aisdk (dispose the hook
+// registration, shutdown() each owned provider exactly once).
+// Sub-AggregateErrors are flattened so the combined report lists every
 // underlying failure once.
 async function disposeAll(disposers: ReadonlyArray<() => void | Promise<void>>): Promise<void> {
   const errors: unknown[] = []

@@ -81,79 +81,23 @@ describe("recordTextEnded", () => {
     expect(record).not.toThrow()
     expect(store.entries.size).toBe(0)
   })
-})
 
-describe("recordTextEnded stall status", () => {
-  const STALL = { stalledMs: 66_000, hint: "kind: ModelOverloadedError" }
-
-  test("records the stall status alongside credits and the rollup reports both", () => {
+  test("a status-only ended event records nothing; credits next to a status are kept as credits only", () => {
     const store = createTransientStore()
+    const status = { stalledMs: 66_000, hint: "kind: ModelOverloadedError" }
 
-    recordTextEnded(store, textEnded("sess", "msg_1", 0, { credits: 2, creditsUnit: "credit", status: STALL }))
-
-    expect([...store.entries.values()]).toEqual([{ credits: 2, unit: "credit", status: STALL }])
-    expect(mergedMessageCredits(store, "sess", [assistant("msg_1")])).toEqual({
-      total: 2,
-      unit: "credit",
-      present: true,
-      status: STALL,
-    })
-  })
-
-  test("records a stall status without credits; the turn still counts as kiro metadata", () => {
-    const store = createTransientStore()
-
-    recordTextEnded(store, textEnded("sess", "msg_1", 0, { status: STALL }))
-
-    expect([...store.entries.values()]).toEqual([{ status: STALL }])
-    const result = mergedMessageCredits(store, "sess", [assistant("msg_1")])
-    expect(result).toEqual({ total: 0, unit: undefined, present: true, status: STALL })
-  })
-
-  test("malformed status is dropped while valid credits are kept; status-only garbage records nothing", () => {
-    const store = createTransientStore()
-
-    // credits survive, the unusable status does not
-    for (const status of [{}, "bad", null, { stalledMs: 0 }, { stalledMs: -5 }, { stalledMs: "66" }, { hint: "no ms" }]) {
-      recordTextEnded(store, textEnded("sess", "msg_1", 0, { credits: 1, creditsUnit: "credit", status }))
-      expect([...store.entries.values()]).toEqual([{ credits: 1, unit: "credit" }])
-    }
-
-    // nothing valid at all: no entry
-    const empty = createTransientStore()
-    const record = (): void => {
-      for (const status of [{}, "bad", { stalledMs: 0 }, { stalledMs: Number.POSITIVE_INFINITY }]) {
-        recordTextEnded(empty, textEnded("sess", "msg_1", 0, { status }))
-      }
-    }
-    expect(record).not.toThrow()
-    expect(empty.entries.size).toBe(0)
-
-    // an empty hint is dropped, a positive stalledMs alone is enough
-    recordTextEnded(empty, textEnded("sess", "msg_1", 0, { status: { stalledMs: 1_500, hint: "" } }))
-    expect([...empty.entries.values()]).toEqual([{ status: { stalledMs: 1_500 } }])
-  })
-
-  test("durable status wins over a transient one, a later clean turn clears it, reconcile drops the superseded tuple", () => {
-    const store = createTransientStore()
-    const durableStall = { stalledMs: 30_000 }
-    recordTextEnded(store, textEnded("sess", "msg_1", 0, { credits: 2, creditsUnit: "credit", status: STALL }))
-
-    // durable msg_1 carries its own status: authoritative over the transient copy
-    const stalledOnly = [assistant("msg_1", [statePart("text", { credits: 2, creditsUnit: "credit", status: durableStall })])]
-    expect(mergedMessageCredits(store, "sess", stalledOnly).status).toEqual(durableStall)
-
-    // a clean later turn replaces the status outright; credits keep summing
-    const withCleanTurn = [...stalledOnly, assistant("msg_2", [statePart("text", { credits: 3, creditsUnit: "credit" })])]
-    expect(mergedMessageCredits(store, "sess", withCleanTurn)).toEqual({ total: 5, unit: "credit", present: true })
-
-    // status-only durable metadata also supersedes the transient tuple on reconcile
-    const statusOnlyDurable = [assistant("msg_1", [statePart("reasoning", { status: durableStall })])]
-    const before = mergedMessageCredits(store, "sess", statusOnlyDurable)
-    reconcile(store, "sess", statusOnlyDurable)
+    // the SDK's stall status rides the same state object, but only credits are transient data
+    recordTextEnded(store, textEnded("sess", "msg_1", 0, { status }))
     expect(store.entries.size).toBe(0)
-    expect(mergedMessageCredits(store, "sess", statusOnlyDurable)).toEqual(before)
-    expect(before).toEqual({ total: 0, unit: undefined, present: true, status: durableStall })
+    expect(mergedMessageCredits(store, "sess", [assistant("msg_1")])).toEqual({
+      total: 0,
+      unit: undefined,
+      present: false,
+    })
+
+    recordTextEnded(store, textEnded("sess", "msg_1", 0, { credits: 2, creditsUnit: "credit", status }))
+    expect([...store.entries.values()]).toEqual([{ credits: 2, unit: "credit" }])
+    expect(mergedMessageCredits(store, "sess", [assistant("msg_1")])).toEqual({ total: 2, unit: "credit", present: true })
   })
 })
 

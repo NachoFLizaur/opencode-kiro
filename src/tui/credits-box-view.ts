@@ -1,9 +1,7 @@
 // credits sidebar box for the `sidebar.content` slot, claimed with `append` so it composes
 // after the built-in sections and never replaces host content. The formatted total + unit
-// line under the "Kiro" header updates live as durable/transient credits change, and a third
-// line summarizes the last completed turn's stall (`last turn stalled 66s (ModelOverloaded)`)
-// only while that turn stalled; a compact companion chip (credits-chip-view.ts) carries the
-// same total and summary in the prompt footer row.
+// line under the "Kiro" header updates live as durable/transient credits change; a compact
+// companion chip (credits-chip-view.ts) carries the same total in the prompt footer row.
 // Presentation only: tui.ts assembles the merged durable+transient rollup and passes it in as
 // an accessor plus optional feature-detected `context.theme` tokens; this module never touches
 // the TUI context. With no tokens (absent or misshapen theme), nothing sets foreground colors
@@ -14,17 +12,17 @@
 import type { ColorInput } from "@opentui/core"
 import { createElement, insert, insertNode, setProp, type DomNode } from "@opentui/solid"
 import { createMemo } from "solid-js"
-import { formatCredits, formatStallSummary, type SessionCredits } from "./credits.js"
+import { formatCredits, type SessionCredits } from "./credits.js"
 
 /**
  * Feature-detected `context.theme` colors for the credits views (validated by tui.ts from
- * `theme.text.default` / `theme.text.subdued`). Every field is optional: an absent token
+ * `theme.text.base` / `theme.text.muted`). Every field is optional: an absent token
  * means "leave the default/inherited styling alone".
  */
 export interface CreditThemeTokens {
-  /** Header foreground (`theme.text.default`). */
+  /** Header foreground (`theme.text.base`). */
   readonly default?: ColorInput
-  /** Amount/chip foreground (`theme.text.subdued`). */
+  /** Amount/chip foreground (`theme.text.muted`). */
   readonly subdued?: ColorInput
 }
 
@@ -36,11 +34,10 @@ export interface CreditThemeTokens {
 export function createCreditsBoxView(credits: () => SessionCredits, tokens?: CreditThemeTokens): DomNode {
   const current = createMemo(credits)
 
-  // stable nodes with reactive strings: all render "" with no credits, so the box collapses
+  // stable nodes with reactive strings: both render "" with no credits, so the box collapses
   // to nothing (tui.ts additionally withholds the node entirely for credit-less sessions).
   // one stable node + reactive string sidesteps opentui child-list reconciliation
-  // (version-dependent in the old clone view). The stall line is also "" for a clean last
-  // turn, so it occupies no row unless there is something to report.
+  // (version-dependent in the old clone view).
   const root = createElement("box")
   insertNode(
     root,
@@ -49,10 +46,6 @@ export function createCreditsBoxView(credits: () => SessionCredits, tokens?: Cre
   insertNode(
     root,
     plainLine(() => (current().present ? formatCredits(current().total, current().unit) : ""), tokens?.subdued),
-  )
-  insertNode(
-    root,
-    plainLine(() => (current().present ? (formatStallSummary(current().status) ?? "") : ""), tokens?.subdued),
   )
   return root
 }

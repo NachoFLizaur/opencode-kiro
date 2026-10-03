@@ -93,9 +93,10 @@ const withoutMandatedLiterals = (code: string): string =>
 
 /**
  * Minimal mock Plugin.Context: just enough surface for the server setup's
- * three registrations (integration/auth, catalog/discovery, aisdk hook) plus
- * the event consumer. Registrations return async disposers; the event stream
- * ends immediately; the connection reads inactive so no discovery kicks off.
+ * five registrations (auth, discovery, logout detector, retry guard, aisdk)
+ * plus the event consumer. Registrations return
+ * async disposers; the event stream ends immediately; the connection reads
+ * inactive so no discovery kicks off.
  */
 const makeMinimalContext = (): unknown => {
   const registration = { dispose: async () => {} }
@@ -104,11 +105,13 @@ const makeMinimalContext = (): unknown => {
       transform: async () => registration,
       list: async () => ({ location: { directory: ROOT } }),
       connection: { active: async () => false },
+      reload: async () => {},
     },
-    catalog: {
+    provider: {
       transform: async () => registration,
       reload: async () => {},
     },
+    session: { hook: async () => registration },
     aisdk: { hook: async () => registration },
     event: { subscribe: () => (async function* () {})() },
   }
@@ -176,11 +179,10 @@ describe("dependency pins and installed plugin API", () => {
 
     // exact expected specifier per dependency block; no `^`/`~`/`*`, no dist-tag
     const expected: Array<[Record<string, string> | undefined, string, string]> = [
-      [pkg.devDependencies, "@opencode-ai/plugin", "0.0.0-dev-18686"],
-      [pkg.peerDependencies, "@opencode-ai/plugin", "0.0.0-dev-18686"],
-      [pkg.dependencies, "@opentui/solid", "0.5.9"],
+      [pkg.devDependencies, "@opencode/plugin", "2.0.20"],
+      [pkg.dependencies, "@opentui/solid", "0.5.12"],
       [pkg.dependencies, "solid-js", "1.9.12"],
-      [pkg.dependencies, "kiro-acp-ai-provider", "3.2.0"],
+      [pkg.dependencies, "kiro-acp-ai-provider", "3.3.0"],
     ]
 
     for (const [block, name, version] of expected) {
@@ -190,15 +192,14 @@ describe("dependency pins and installed plugin API", () => {
       expect(specifier).not.toMatch(/^(next|latest|beta|dev)$/)
     }
 
-    // the plugin pin is an exact dev-channel version string (never the `dev`
-    // dist-tag): the shape check plus the equality above pins the verified
-    // `0.0.0-dev-18686`
-    expect(pkg.devDependencies?.["@opencode-ai/plugin"]).toMatch(/^0\.0\.0-dev-\d+$/)
+    // the plugin development pin is an exact 2.0.x release (never a dist-tag):
+    // the shape check plus the equality above pins the verified `2.0.20`.
+    expect(pkg.devDependencies?.["@opencode/plugin"]).toMatch(/^2\.0\.\d+$/)
   })
 
   test("installed plugin package has the current exports layout", async () => {
     const installed = JSON.parse(
-      await readFile(join(ROOT, "node_modules", "@opencode-ai", "plugin", "package.json"), "utf8"),
+      await readFile(join(ROOT, "node_modules", "@opencode", "plugin", "package.json"), "utf8"),
     ) as { exports?: Record<string, unknown> }
 
     const subpaths = Object.keys(installed.exports ?? {})
@@ -207,23 +208,22 @@ describe("dependency pins and installed plugin API", () => {
     expect(subpaths).toContain("./tui")
     // an older layout routed the promise API through ./v2/promise; reject it
     expect(subpaths).not.toContain("./v2/promise")
-    // the dev channel dropped the ./v1 compatibility subpath entirely
+    // the 2.x plugin API has no ./v1 compatibility subpath
     expect(subpaths).not.toContain("./v1")
   })
 })
 
 describe("module entry contracts", () => {
-  test("server entry exports { id: 'kiro', tui: true, setup }", async () => {
+  test("server entry exports { id: 'kiro', setup } without a tui flag", async () => {
     const mod = await importDist("server.js")
 
     expect(mod.default.id).toBe("kiro")
     expect(typeof mod.default.setup).toBe("function")
-    // auto-load flag: the host loads ./tui itself for npm installs
-    expect(mod.default.tui).toBe(true)
+    // The host discovers the TUI half from the package's ./tui export.
+    expect("tui" in mod.default).toBe(false)
     // named export kept for compatibility; same reference as the default so they can't drift
     expect(mod.KiroAuthPlugin).toBe(mod.default)
     // loader rejects modules exposing both kinds: no legacy wrapper properties anywhere
-    // (`tui` above is the boolean flag, never a module-kind object)
     expect("server" in mod.default).toBe(false)
   })
 
@@ -254,7 +254,7 @@ describe("module entry contracts", () => {
       // constants; any other residual mention means the host/SDK package was
       // bundled instead of left external.
       expect(residue).not.toContain("kiro-acp-ai-provider")
-      expect(residue).not.toContain("@opencode-ai/plugin")
+      expect(residue).not.toContain("@opencode/plugin")
       expect(residue).not.toContain("@opentui")
       expect(residue).not.toContain("solid-js")
     }
@@ -262,6 +262,15 @@ describe("module entry contracts", () => {
     // the lazy SDK imports must remain literal external specifiers
     const serverCode = await readFile(distPath("server.js"), "utf8")
     expect(serverCode).toContain('import("kiro-acp-ai-provider")')
+  })
+
+  test("server dist uses provider discovery without removed domains or model transforms", async () => {
+    const code = await readFile(distPath("server.js"), "utf8")
+    expect(code).toContain("provider.transform")
+    expect(code).toContain("provider.reload")
+    for (const removed of ["context.catalog", "catalog.transform", "catalog.reload", "CatalogDraft", "model.transform"]) {
+      expect(code).not.toContain(removed)
+    }
   })
 
   test("server cleanup is idempotent", async () => {
@@ -317,14 +326,14 @@ const nodeProbe = async (cwd: string, code: string): Promise<string> => {
 const hostSensitivePins = async (): Promise<Array<[name: string, version: string]>> => {
   const pkg = await readPkg()
   return [
-    ["@opencode-ai/plugin", pkg.devDependencies?.["@opencode-ai/plugin"] ?? ""],
+    ["@opencode/plugin", pkg.devDependencies?.["@opencode/plugin"] ?? ""],
     ["@opentui/solid", pkg.dependencies?.["@opentui/solid"] ?? ""],
     ["solid-js", pkg.dependencies?.["solid-js"] ?? ""],
     ["kiro-acp-ai-provider", pkg.dependencies?.["kiro-acp-ai-provider"] ?? ""],
   ]
 }
 
-const TESTED_OPENCODE_SHA = "8ba434b5973856b2f32b8cd3543e154b25c413e6"
+const TESTED_OPENCODE_SHA = "84c9be93a56304a108f1a22df0c5d62c26d5b6ca"
 
 describe("packaging and docs invariants", () => {
   test("pack payload is dist-only", async () => {
@@ -379,8 +388,8 @@ describe("packaging and docs invariants", () => {
       { label: "README.md", content: await readFile(join(ROOT, "README.md"), "utf8"), fullPinTable: false },
     ]
 
-    // package.json is internally consistent: dev and peer pins of the plugin API match
-    expect(pkg.devDependencies?.["@opencode-ai/plugin"]).toBe(pkg.peerDependencies?.["@opencode-ai/plugin"])
+    // The host supplies the plugin API at runtime; no peer is declared.
+    expect(pkg.peerDependencies?.["@opencode/plugin"]).toBeUndefined()
 
     for (const [name, version] of pins) {
       expect(version, `${name} must be pinned in package.json`).not.toBe("")
@@ -396,9 +405,9 @@ describe("packaging and docs invariants", () => {
         }
       } else {
         // scoped check: plugin-API pin row (trailing cell text is free-form) + tested SHA
-        const pluginPin = pkg.devDependencies?.["@opencode-ai/plugin"] ?? ""
-        expect(content, `${label} row for @opencode-ai/plugin@${pluginPin}`).toContain(
-          `| \`@opencode-ai/plugin\` | \`${pluginPin}\``,
+        const pluginPin = pkg.devDependencies?.["@opencode/plugin"] ?? ""
+        expect(content, `${label} row for @opencode/plugin@${pluginPin}`).toContain(
+          `| \`@opencode/plugin\` | \`${pluginPin}\``,
         )
         expect(content, `${label} tested SHA`).toContain(TESTED_OPENCODE_SHA)
       }
@@ -424,7 +433,7 @@ describe("packaging and docs invariants", () => {
     }
   })
 
-  test("README documents plugin options with the npm-channel-only caveat", async () => {
+  test("README documents options for configured npm and local directory plugins", async () => {
     const readme = await readFile(join(ROOT, "README.md"), "utf8")
 
     // the options table lists every accepted key with its default: a row whose
@@ -439,11 +448,10 @@ describe("packaging and docs invariants", () => {
       expect(readme, `options table row for ${name} with default ${defaultValue}`).toMatch(row)
     }
 
-    // The host hands `options` only to plugins it installed from npm; bundled or
-    // built-in loads receive an empty options object, so the defaults always
-    // apply there. The README must say so (wording may shift; the caveat may not
-    // vanish) and must show the object-form entry with its empty `options`.
-    expect(readme).toMatch(/npm channel only/i)
+    // Configured npm and local directory sources receive options; bundled or
+    // built-in loads receive {}. Keep both the distinction and the object form.
+    expect(readme).toMatch(/options are honored for configured plugins: npm specs and local directory specs/i)
+    expect(readme).toMatch(/bundled or built-in plugin loads receive `\{\}`/i)
     expect(readme).toMatch(/"options":\s*\{\}/)
 
     // the working directory is derived per location, never user-supplied
@@ -482,7 +490,7 @@ describe("packaging and docs invariants", () => {
       expect(content, `${file} tested SHA`).toContain(TESTED_OPENCODE_SHA)
 
       // no `pkg@latest` / `pkg@next` / `pkg@beta` / `pkg@dev` install specifier anywhere
-      // (`0.0.0-dev-18686` is an exact version string, not the `dev` dist-tag)
+      // (`2.0.20` is an exact release version, not a dist-tag)
       expect(content, `${file} floating dist-tag`).not.toMatch(/@(latest|next|beta|dev)(?![\w.-])/)
       // and no floating range specifiers for the host-sensitive deps
       for (const [name] of await hostSensitivePins()) {
@@ -618,9 +626,8 @@ describe("packed tarball entry resolution", () => {
   let installedPluginDir: string
 
   // Single real pack + single hermetic temp-dir install, reused by every test
-  // below. `--cache` points at a throwaway cache and `--omit=peer` skips the
-  // host-provided plugin API (dist/*.js carries no runtime import of
-  // @opencode-ai/plugin — asserted by "host packages are not bundled" above).
+  // below. `--cache` points at a throwaway cache; `--omit=peer` remains for
+  // the hermetic install even though this package declares no peers.
   beforeAll(async () => {
     workDir = await mkdtemp(join(tmpdir(), "opencode-kiro-pack-"))
     consumerDir = join(workDir, "consumer")
@@ -662,17 +669,17 @@ describe("packed tarball entry resolution", () => {
        console.log(JSON.stringify({
          id: mod.default?.id,
          setup: typeof mod.default?.setup,
-         tui: mod.default?.tui,
+         hasTuiProp: Object.hasOwn(mod.default ?? {}, "tui"),
          hasServerProp: "server" in (mod.default ?? {}),
          namedIsDefault: mod.KiroAuthPlugin === mod.default,
        }));`,
     )
 
-    // `tui: true` is the auto-load flag (boolean, not a module-kind object)
+    // No server-side TUI flag: discovery uses the package's ./tui export.
     expect(JSON.parse(out)).toEqual({
       id: "kiro",
       setup: "function",
-      tui: true,
+      hasTuiProp: false,
       hasServerProp: false,
       namedIsDefault: true,
     })

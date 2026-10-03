@@ -1,17 +1,21 @@
 // Server plugin: setup composition. Registers the Integration/auth flow, the
-// catalog transform + discovery lifecycle, and the AISDK hooks over one
-// per-location ServerState with an aggregated cleanup (src/server/lifecycle.ts).
+// provider transform + discovery lifecycle, the logout detector, the retry
+// guard, and the AISDK hooks over one per-location ServerState with an
+// aggregated cleanup (src/server/lifecycle.ts).
 //
-// Installed-types note: `@opencode-ai/plugin` (root promise export) namespaces its
+// Installed-types note: `@opencode/plugin` (root promise export) namespaces its
 // types as `Plugin.Plugin` / `Plugin.Context` / `Plugin.Cleanup` via
 // `export * as Plugin from "./plugin.js"`.
-import type { Plugin } from "@opencode-ai/plugin"
+import type { Plugin } from "@opencode/plugin"
 import { registerAisdkHook } from "./server/aisdk.js"
 import { registerAuth } from "./server/auth.js"
-import { type KiroPluginOptions, registerDiscovery } from "./server/discovery.js"
+import { KIRO_PROVIDER_ID, type KiroPluginOptions, registerDiscovery } from "./server/discovery.js"
 import { buildCleanup, createServerState } from "./server/lifecycle.js"
+import { createLogoutDetector, registerLogoutDetector } from "./server/logout.js"
+import { createRetryGuard, registerRetryGuard } from "./server/retry.js"
 
-// Plugin options (npm channel only — bundled/builtin plugins receive {}).
+// Plugin options apply to configured npm and local-directory plugins;
+// bundled/builtin plugins receive {}.
 // Some hosts omit `context.options` entirely, so the ?? {} guard at the call
 // site is required. No `cwd` option by design — the per-location
 // integration.list() derivation is strictly better (discovery.ts).
@@ -51,11 +55,19 @@ function resolveStall(raw: unknown): KiroPluginOptions["stall"] {
 }
 
 // setup order: resolve plugin options -> build per-location state ->
-// registerAuth (Integration `kiro` + Kiro CLI Login OAuth) -> registerDiscovery
-// (captures cwd from integration.list().location, registers the catalog
-// transform + event consumer, kicks off one initial discovery when already
-// connected and `discover` is not false) -> registerAisdkHook (plugin-owned
-// createKiroAcp provider) -> return the one aggregated, idempotent cleanup.
+// registerAuth (Integration `kiro` + Kiro CLI Login OAuth; the transform also
+// publishes the logout stage) -> registerDiscovery (captures cwd from
+// integration.list().location, registers the provider transform + event
+// consumer, kicks off one initial discovery when already connected and
+// `discover` is not false) -> registerLogoutDetector (provider-scoped
+// `context` session hook probing kiro-cli's auth state) -> registerRetryGuard
+// (provider-scoped `retry` session hook that stops retries of not-logged-in
+// failures) -> registerAisdkHook (plugin-owned createKiroAcp provider) ->
+// return the one aggregated, idempotent cleanup.
+//
+// The logout detector is built before registerAuth because the login flow
+// reports its authenticated observations to it; the detector's own hook is
+// registered afterwards and its disposer joins the same ordered list.
 //
 // Failure path: if any registration throws mid-setup, the partial cleanup runs
 // over the disposers registered so far (no leaked registrations) and the
@@ -63,19 +75,24 @@ function resolveStall(raw: unknown): KiroPluginOptions["stall"] {
 // swallowed so they cannot mask it.
 const plugin: Plugin.Plugin = {
   id: "kiro",
-  // tui: true (dist/promise/plugin.d.ts) — the host auto-loads this
-  // package's `./tui` entrypoint for npm-channel installs (single config entry)
-  tui: true,
+  // The host discovers the TUI half from this package's `./tui` export.
   async setup(context: Plugin.Context): Promise<Plugin.Cleanup> {
     // `PluginOptions` is a loose Readonly<Record<string, any>> in the installed
     // d.ts; the runtime typeof checks in resolveOptions are the real guard
     const options = resolveOptions((context.options ?? {}) as Record<string, unknown>)
     const state = createServerState()
     const cleanup = buildCleanup(state)
+    const logoutDetector = createLogoutDetector(state.logout, {
+      reload: () => context.integration.reload(),
+    })
 
     try {
-      state.disposers.push(await registerAuth(context, state.auth))
+      state.disposers.push(
+        await registerAuth(context, state.auth, state.logout, () => logoutDetector.noteAuthenticated()),
+      )
       state.disposers.push(await registerDiscovery(context, state.discovery, options))
+      state.disposers.push(await registerLogoutDetector(context, logoutDetector, KIRO_PROVIDER_ID))
+      state.disposers.push(await registerRetryGuard(context, createRetryGuard(), KIRO_PROVIDER_ID))
       state.disposers.push(await registerAisdkHook(context, state.aisdk))
     } catch (error) {
       await Promise.resolve(cleanup()).catch(() => {})

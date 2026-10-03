@@ -5,11 +5,160 @@ All notable changes to `opencode-kiro` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-The `0.5.0` prerelease line targets the **unreleased OpenCode v2** plugin contract at
-one pinned host snapshot per release. It does not work with OpenCode v1 and carries no
-stability promise: it may break when OpenCode's v2 branch moves. OpenCode v1 users:
-stay on `opencode-kiro@0.4.0` (the `main` branch / npm `latest` line). No OpenCode v2
-release date is known or claimed here. Current pins: [docs/COMPATIBILITY.md](./docs/COMPATIBILITY.md).
+The `0.5.0` prerelease line targets **OpenCode 2 stable 2.x** with one tested host
+version per release. The plugin is still a prerelease and carries no stability
+promise. It does not work with OpenCode v1; v1 users should stay on
+`opencode-kiro@0.4.0` (the `main` branch / npm `latest` line).
+Current pins: [docs/COMPATIBILITY.md](./docs/COMPATIBILITY.md).
+
+## [0.5.0-beta.7] - 2026-10-01
+
+### Compatibility
+
+| Item | Value |
+|---|---|
+| Tested OpenCode commit (`v2.0.20` tag) | `84c9be93a56304a108f1a22df0c5d62c26d5b6ca` |
+| Package version | `0.5.0-beta.7` |
+
+| Package | Pinned version | Where |
+|---|---|---|
+| `@opencode/plugin` | `2.0.20` | devDependencies (exact; types and tests only); no peer dependency, tested on 2.0.20 |
+| `@opentui/solid` | `0.5.12` | dependencies (exact; satisfies the `>=0.5.12` peer floor; bundler-external, never bundled) |
+| `solid-js` | `1.9.12` | dependencies (exact; `@opentui/solid@0.5.12` peers this exactly; bundler-external, never bundled; unchanged) |
+| `kiro-acp-ai-provider` | `3.3.0` | dependencies (exact; moved from `3.2.0`) |
+
+Requires kiro-acp-ai-provider 3.3.0.
+
+Pin your install spec too: the host background-auto-refreshes unpinned npm plugin
+packages, so a bare `"opencode-kiro"` `plugins` entry can silently move you off the
+tested build. Use the exact `opencode-kiro@0.5.0-beta.7` spec.
+
+### Added
+
+- **Logout detection and a reconnect dialog.** On a Kiro turn, the plugin checks
+  kiro-cli's login state. The first definitive logged-out result shows a TUI confirm
+  dialog titled "Kiro CLI is logged out" with the message "Reconnect now?". Confirming
+  removes the stored Kiro connection and opens the connect dialog. Cancelling or
+  dismissing does nothing immediately, but a follow-up check about 6 seconds after
+  the first logged-out result removes the stale connection automatically if it
+  confirms the logout. Kiro models then disappear until you reconnect through
+  `/connect`. The dialog is shown once per logout, not on every turn.
+- **Retry safety net for logged-out turns.** A turn that fails with kiro-cli's
+  not-logged-in error is not retried. Reconnect before sending again; other errors
+  keep their existing retry behavior.
+- **Reason in the stall notice's closing line.** When kiro-cli logged an error during
+  the turn and a short reason can be derived, the notice closes with
+  `output resumed after Ns (ModelOverloaded)` or
+  `turn ended after Ns without further output (ModelOverloaded)`. Without a reason,
+  the closing line keeps its duration-only wording, with no parentheses.
+
+### Changed
+
+- **Stable OpenCode 2 host.** Beta.7 targets OpenCode 2 stable 2.0.x and is tested on
+  2.0.20 (reference host `@opencode/cli@2.0.20`); later releases are not guaranteed
+  to work. `@opencode/plugin@2.0.20` replaces the former plugin package scope and
+  remains an exact development pin for types and tests only. The tested host SHA
+  is recorded above.
+- **No peer dependency.** The `@opencode/plugin` peer declaration was removed before
+  release: the host supplies the plugin API at runtime and never checks the range,
+  and the declaration only made npm install an unused copy of the plugin API (and
+  its dependencies) next to the plugin.
+- **Discovery uses the provider domain.** Registration and reload now use
+  `provider.transform` / `provider.reload`, with mutations through the provider
+  editor and its `models.update/remove` methods. The removed catalog domain is no
+  longer used; intersection, fallback self-registration, efforts, fail-open behavior,
+  generation guards, timeout and retries are unchanged. No model transform or older
+  host compatibility shim is added.
+- **TUI discovery uses the `./tui` export.** The server definition no longer has a
+  `tui: true` property. The single `plugins` entry still loads both halves, and
+  `-kiro` still disables both.
+- **OpenTUI moves to `0.5.12`.** `solid-js` remains exactly `1.9.12`; both stay external
+  to the bundle.
+- **Host theme tokens.** The credits box and chip read the host's `text.base` and
+  `text.muted` theme tokens. Older token names are not read.
+- **Credential removal is location-less.** The logout watcher sends only
+  `{ credentialID }`; episode tracking and integration sync/list remain scoped by
+  TUI location.
+- **Session context uses the new input shape.** The callback accepts
+  `{ sessionID, agent, model, system, messages, tools, options }` without changing
+  logout detection or retry decisions.
+- **Options are honored for configured local plugins too.** Both npm specs and
+  local directory specs receive `plugins[].options`; bundled or built-in loads
+  receive `{}` and use the defaults.
+- **`live: "off"` now means no stall UX in the TUI.** It hides the transcript notice
+  and there is no footer/box stall line. Stall metadata is still emitted for other
+  consumers; `afterMs: 0` still disables stall detection entirely.
+- **The stall summary moved into the notice.** Its closing line carries the duration
+  and available reason instead of repeating that information in the sidebar credits
+  box and footer credits chip. Both credits surfaces now show credits only.
+
+### Removed
+
+- The footer/box `last turn stalled` line and rendering of stall `status` in the TUI
+  credits surfaces. Credit totals and live credit updates are unchanged.
+
+### Fixed
+
+- **A stale "last turn stalled" warning no longer lingers after later turns.** The
+  sidebar box and footer chip could keep showing an old stall after a later turn
+  completed without one. The warning is now confined to the affected turn's notice
+  in the transcript instead of remaining beside the current credits total.
+
+### Upgrading from beta.5
+
+Upgrade the host to OpenCode 2.0.20 first, then restart it; check that
+`opencode2 --version` (or your host executable) reports v2.0.20.
+
+**Upgrade the host first.** Use OpenCode 2 stable `@opencode/cli@2.0.20`, the reference
+host for beta.7. Beta.7 targets 2.0.x and is tested on 2.0.20; later releases are
+not guaranteed to work. No peer dependency is declared because the host supplies
+the plugin API at runtime. Older hosts, including the former-scope CLI build
+`0.0.0-beta-19271`, are **not supported by beta.7**; use `opencode-kiro@0.5.0-beta.5`
+there.
+
+OpenTUI 0.5.12 (`@opentui/core`, pulled in by the OpenCode 2.0.20 host floor)
+declares `node >=26.4.0`, so an install with `engine-strict` enabled refuses older
+Node versions even though the plugin itself declares `>=20`.
+
+Then update the pinned plugin to `opencode-kiro@0.5.0-beta.7` and restart OpenCode.
+Existing options and connections carry over. If Kiro shows as
+connected after `kiro-cli logout`, the next Kiro turn now offers to reconnect once
+the login check detects the logout (subject to the 60-second window below). If you
+use `stall: { live: "off" }`, no stall UI is shown; use `live: "reasoning"` to see the
+notice when thinking is shown.
+
+### Documentation
+
+- Local development now uses the absolute built `dist/` directory as the plugin
+  source, with both server and TUI entrypoints; `name@file:` is not required.
+  The colon-path TUI caveat applies to `name@file:` tarball installs only.
+- The host generates variants through the package-keyed protocol map in
+  `packages/core/src/variant.ts`, with no Kiro or generic `aisdk:` entry. Runtime
+  effort enrichment remains the plugin's responsibility.
+
+### Known limitations
+
+- Conversations that run without tools (for example an agent with all tools disabled)
+  can lose earlier context after the first turn, because OpenCode's title request
+  and the main turn can end up sharing one Kiro session. This is a known,
+  pre-existing issue with a fix planned for a later release.
+- Compaction completes, but the Kiro session may not receive the earlier conversation
+  or the compaction summary, so the following turns can miss context. This is a
+  known, pre-existing issue with a fix planned for a later release.
+- **Detection runs on a Kiro turn, not at model selection.** Selecting a Kiro model
+  alone does not check whether kiro-cli is still logged in.
+- **Authenticated checks are cached for 60 seconds per project location.** A turn
+  within that window does not run a fresh check; a logout is noticed on the next Kiro
+  turn after the window expires, not automatically when the 60 seconds elapse.
+- **Inconclusive checks leave the connection in place.** If kiro-cli is unreachable
+  or times out, the plugin does not treat that as a logout. An inconclusive follow-up
+  is tried once more about 6 seconds later; if that is also inconclusive, the stale
+  connection stays unless you confirm the dialog or a later turn's check confirms
+  the logout. Cancelling the dialog defers reconnecting, not removal once logout is
+  confirmed.
+- **The stall notice is visible only when thinking is shown.** Its reason is
+  best-effort and omitted when kiro-cli's log is unreadable or has no recognizable
+  reason. There is no fallback stall line in the credits surfaces.
 
 ## [0.5.0-beta.5] - 2026-09-04
 
@@ -495,6 +644,7 @@ v1 plugin contract throughout: singular `plugin` arrays in `opencode.json` and
 `tui.json`, the `opencode plugin opencode-kiro` installer, and `part.metadata.kiro`
 credits. Full documentation: the README at the `v0.4.0` tag.
 
+[0.5.0-beta.7]: https://www.npmjs.com/package/opencode-kiro/v/0.5.0-beta.7
 [0.5.0-beta.5]: https://www.npmjs.com/package/opencode-kiro/v/0.5.0-beta.5
 [0.5.0-beta.4]: https://www.npmjs.com/package/opencode-kiro/v/0.5.0-beta.4
 [0.5.0-beta.3]: https://www.npmjs.com/package/opencode-kiro/v/0.5.0-beta.3

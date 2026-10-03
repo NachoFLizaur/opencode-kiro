@@ -1,12 +1,15 @@
 // TUI plugin: appends the Kiro credits surfaces and replaces nothing. Two additive slot
 // claims: `sidebar.content` (credits box: "Kiro" header + formatted total) and
 // `prompt.footer.status` (compact chip with the same total + unit, after the host's status
-// content). Both add a one-line stall summary when the last completed turn stalled. Credits
-// and status come from durable messages via `context.data.session.message.list` plus a
+// content). Credits come from durable messages via `context.data.session.message.list` plus a
 // transient store fed by `session.text.ended` and `session.reasoning.ended` events: the host's
 // live reducer drops `event.data.state` for text-only responses, so the transient store is a
 // live overlay and the durable value wins on reconcile. `context.data.session.message.sync` is
 // never forced.
+//
+// A third listener, `integration.updated`, watches the `kiroLoggedOut` flag the server plugin
+// writes on the kiro integration and offers to reconnect (tui/logout.ts): the stale credential
+// is removed and the connect flow opened, so the host hides Kiro models until the user logs in.
 //
 // Lazy-import rule: @opentui/core is Bun-native and only exists inside the TUI host, so the
 // view modules and solid-js are imported inside setup — never at module top level — keeping
@@ -14,12 +17,13 @@
 // imports to its own module instances, so the reactivity below shares the host's solid runtime.
 //
 // Types: `sessionID` is required on `sidebar.content` but optional on `prompt.footer.status`
-// (the chip is withheld when absent). `@opencode-ai/theme` is an uninstalled peer, so
+// (the chip is withheld when absent). `@opencode/theme` is an uninstalled peer, so
 // `context.theme` tokens are feature-detected at render time.
-import type { Plugin } from "@opencode-ai/plugin/tui"
+import type { Plugin } from "@opencode/plugin/tui"
 import type { JSX } from "@opentui/solid"
 import type { CreditThemeTokens } from "./tui/credits-box-view.js"
 import type { SessionCredits } from "./tui/credits.js"
+import { createLogoutWatcher } from "./tui/logout.js"
 import {
   clear,
   createTransientStore,
@@ -49,7 +53,7 @@ function readColorToken(value: unknown): CreditThemeTokens["default"] {
 }
 
 /**
- * Feature-detect `context.theme` tokens (`theme.text.default` / `theme.text.subdued` per the
+ * Feature-detect `context.theme` tokens (`theme.text.base` / `theme.text.muted` per the
  * ResolvedTheme shape). Returns undefined for an absent/misshapen theme so the views keep
  * their default styling — rendering never depends on the theme.
  */
@@ -58,8 +62,8 @@ function readThemeTokens(theme: unknown): CreditThemeTokens | undefined {
   const text = (theme as Record<string, unknown>).text
   if (typeof text !== "object" || text === null) return undefined
   const tokens = text as Record<string, unknown>
-  const defaultFg = readColorToken(tokens.default)
-  const subduedFg = readColorToken(tokens.subdued)
+  const defaultFg = readColorToken(tokens.base)
+  const subduedFg = readColorToken(tokens.muted)
   if (defaultFg === undefined && subduedFg === undefined) return undefined
   return { default: defaultFg, subdued: subduedFg }
 }
@@ -76,7 +80,7 @@ const plugin: Plugin.Definition = {
     let disposed = false
 
     // transient store: hosted in TUI `storage.memory` when available so the live-overlay
-    // credits survive plugin hot reloads (`tui: true` installs) — solid stores leave Map values
+    // credits survive plugin hot reloads of the `./tui` entrypoint - solid stores leave Map values
     // unwrapped, so the store's pure API in transient-credits.ts is unchanged. A memory-backed
     // store is shared with the next plugin generation and therefore intentionally not cleared
     // on cleanup; the fallback per-setup store is cleared (registered first so the
@@ -99,11 +103,11 @@ const plugin: Plugin.Definition = {
     // reads re-run after an ended-part record, independent of host reducer ordering.
     const [transientVersion, setTransientVersion] = createSignal(0)
 
-    // Credits and the stall status ride the ended event of whichever part closes the turn:
-    // normally the last text part, but when a stall notice is still open at turn end the SDK
-    // closes that reasoning part and attaches the metadata there instead. Both event kinds share
-    // one data shape and one never-throw recording path: invalid payloads are swallowed by
-    // recordTextEnded's guards, and anything unexpected is ignored here.
+    // Credits ride the ended event of whichever part closes the turn: normally the last text
+    // part, but when a stall notice is still open at turn end the SDK closes that reasoning part
+    // and attaches the credits there instead. Both event kinds share one data shape and one
+    // never-throw recording path: invalid payloads are swallowed by recordTextEnded's guards,
+    // and anything unexpected is ignored here.
     const recordEnded = (event: TextEndedEvent): void => {
       try {
         recordTextEnded(store, event)
@@ -114,6 +118,14 @@ const plugin: Plugin.Definition = {
     }
     disposers.push(context.data.on("session.text.ended", recordEnded))
     disposers.push(context.data.on("session.reasoning.ended", recordEnded))
+
+    // Logout dialog: the server plugin flags the kiro integration's metadata when kiro-cli is
+    // logged out; the watcher syncs the integration list on each update, prompts once per
+    // logged-out episode and removes the stale credential (tui/logout.ts). Its handler never
+    // throws. The watcher is disposed before its listener so in-flight work stops first.
+    const logout = createLogoutWatcher(context)
+    disposers.push(context.data.on("integration.updated", logout.handle))
+    disposers.push(logout.dispose)
 
     // Render-path data assembly (views stay presentation-only): every fresh durable read
     // reconciles the transient store first, so durable state stays authoritative and

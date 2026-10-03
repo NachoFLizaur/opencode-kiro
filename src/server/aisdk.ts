@@ -10,7 +10,7 @@
 // through the `language` hook's `languageModel(id, { effort })` override. Every
 // owned instance is `shutdown()` exactly once from the aggregated cleanup.
 // The SDK import stays lazy so dist/server.js loads under plain Node.
-import type { Model, Plugin } from "@opencode-ai/plugin"
+import type { Model, Plugin } from "@opencode/plugin"
 import type { KiroACPModelOverrides, KiroACPProvider, KiroACPProviderSettings } from "kiro-acp-ai-provider"
 // NAMED import on purpose: esbuild converts top-level JSON properties into
 // named exports and tree-shakes the rest, so dist/server.js inlines only the
@@ -72,7 +72,7 @@ export function createAisdkResources(): AisdkResources {
 }
 
 // accept the normalized bare name and (defensively) the raw `aisdk:`-prefixed
-// catalog value, in case a future core stops normalizing before the event
+// provider value, in case a future core stops normalizing before the event
 function isKiroPackage(pkg: string): boolean {
   return pkg === KIRO_SDK_PACKAGE || pkg === `aisdk:${KIRO_SDK_PACKAGE}`
 }
@@ -82,7 +82,7 @@ function isKiroPackage(pkg: string): boolean {
 //  - effort / efforts: carried per-request via the language hook's
 //    KiroACPModelOverrides — including them in the settings/key would defeat
 //    provider sharing across efforts.
-//  - onPermission: function-valued (unkeyable) and never set by the catalog.
+//  - onPermission: function-valued (unkeyable) and never set by the provider transform.
 //  - everything else (e.g. the host-injected `fetch`): not consumed by
 //    createKiroAcp — dropping unknown keys is the allowlist's point.
 // The `satisfies` clause is the compile pin: an SDK key rename breaks the
@@ -105,7 +105,7 @@ const SETTINGS_ALLOWLIST = [
 // pick the allowlisted keys present on the event options (skip undefined).
 // The returned object is used for both the cache key and the `createKiroAcp`
 // argument, so key and factory input can never diverge. Values are trusted:
-// they originate from this plugin's own catalog transform (discovery.ts
+// they originate from this plugin's own provider transform (discovery.ts
 // provider settings).
 function sanitizeSettings(options: Record<string, unknown>): Record<string, unknown> {
   const settings: Record<string, unknown> = {}

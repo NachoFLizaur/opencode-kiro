@@ -1,17 +1,17 @@
-// Catalog transform + async runtime model discovery lifecycle.
+// Provider transform + async runtime model discovery lifecycle.
 //
-// The catalog transform is a synchronous mutation phase: it reads only the
+// The provider transform is a synchronous mutation phase: it reads only the
 // captured last-known-good discovery snapshot and never performs I/O. The
 // asynchronous `listModels({ cwd })` discovery runs outside transforms, guarded
 // by a generation token (stale completions after logout or a newer discovery
 // are discarded) and coalesced (concurrent discover() calls share one in-flight
-// call). `catalog.reload()` is only ever called from discovery code paths, never
+// call). `provider.reload()` is only ever called from discovery code paths, never
 // from inside the transform. Discovery fails open: an empty snapshot, duplicate
-// runtime modelIds, or an exception leave the previous catalog data untouched.
+// runtime modelIds, or an exception leave the previous provider data untouched.
 // A probe that fails or exceeds its deadline is reported on stderr and retried
 // with bounded backoff while the connection stays active.
 // The SDK import stays lazy so dist/server.js loads under plain Node.
-import type { Integration, Model, Plugin } from "@opencode-ai/plugin"
+import type { Integration, Model, Plugin } from "@opencode/plugin"
 import type { KiroACPProviderSettings, ModelWithEfforts } from "kiro-acp-ai-provider"
 import { KIRO_INTEGRATION_ID, KIRO_INTEGRATION_NAME } from "./auth.js"
 
@@ -20,10 +20,12 @@ import { KIRO_INTEGRATION_ID, KIRO_INTEGRATION_NAME } from "./auth.js"
 export const KIRO_PROVIDER_ID = "kiro"
 export const KIRO_PROVIDER_PACKAGE = "aisdk:kiro-acp-ai-provider"
 
-// derive draft/model/event types from the installed d.ts (CatalogDraft and
-// the event union are not exported from the package root)
-type CatalogDraft = Parameters<Parameters<Plugin.Context["catalog"]["transform"]>[0]>[0]
-type MutableModel = Parameters<Parameters<CatalogDraft["model"]["update"]>[2]>[0]
+// Derive editor, record, mutation and event types from the installed domains;
+// the editor and event union are not exported from the package root.
+type ProviderEditor = Parameters<Parameters<Plugin.Context["provider"]["transform"]>[0]>[0]
+type ProviderRecord = ReturnType<ProviderEditor["get"]>
+type MutableProvider = Parameters<Parameters<ProviderEditor["update"]>[1]>[0]
+type MutableModel = Parameters<Parameters<ProviderEditor["models"]["update"]>[2]>[0]
 type ServerEvent =
   ReturnType<Plugin.Context["event"]["subscribe"]> extends AsyncIterable<infer E> ? E : never
 
@@ -127,7 +129,7 @@ export function createDiscoveryResources(): DiscoveryResources {
 // effort-variant merge: empty runtime efforts → model untouched (no invented
 // variants); a defined baseline effort lands in `model.settings.effort`; each
 // runtime effort upserts a `variants[]` entry whose `settings.effort` carries
-// the effort string unchanged. Existing catalog variants not named by the
+// the effort string unchanged. Existing model variants not named by the
 // runtime are preserved.
 //
 // The variant settings key must be the SDK's own `KiroACPProviderSettings.effort`
@@ -159,28 +161,29 @@ function applyEfforts(model: MutableModel, runtimeModel: ModelWithEfforts): void
   }
 }
 
-// synchronous catalog transform body. Reads only the captured snapshot:
-// - empty/undefined snapshot → catalog left untouched (fail open)
-// - rich models.dev Kiro entry → exact case-sensitive intersection of catalog
+// synchronous provider transform body. Reads only the captured snapshot:
+// - empty/undefined snapshot -> provider left untouched (fail open)
+// - rich models.dev Kiro entry -> exact case-sensitive intersection of source
 //   `Model.Info.modelID` against runtime `modelId`, metadata preserved
-// - no rich entry → minimal self-registration of only runtime-returned models
+// - no rich entry -> minimal self-registration of only runtime-returned models
 // Provider settings carry the deterministic SDK factory inputs that become
 // `event.options` for the aisdk hooks; `contextWindows` is keyed by the API
 // model ID (`Model.Info.modelID`), not the catalog key. `agent`, `mcpTimeout`
 // and (when configured) `stall` come from the resolved plugin options; all
 // three keys are on the sdk hook's SETTINGS_ALLOWLIST (src/server/aisdk.ts),
-// so custom values reach `createKiroAcp` through catalog → host overlay →
+// so custom values reach `createKiroAcp` through provider -> host overlay ->
 // `event.options` unchanged. `stall` is omitted when unset so the SDK
 // defaults apply.
-export function applyCatalogSnapshot(draft: CatalogDraft, state: DiscoveryState): void {
+export function applyProviderSnapshot(editor: ProviderEditor, state: DiscoveryState): void {
   const snapshot = state.snapshot
   if (snapshot === undefined || snapshot.length === 0) return
 
   const runtime = new Map(snapshot.map((model) => [model.modelId, model]))
 
-  // rich = a models.dev Kiro entry with models is already in the draft
-  // (`provider.get` does not upsert; only `update` initializes missing records)
-  const record = draft.provider.get(KIRO_PROVIDER_ID)
+  // rich = a models.dev Kiro entry with models is already in the editor
+  // (`get` does not upsert; `update` initializes missing records).
+  // Record models are read-only; mutations go through `models.update/remove`.
+  const record: ProviderRecord = editor.get(KIRO_PROVIDER_ID)
   const rich = record !== undefined && record.models.size > 0
 
   const contextWindows: Record<string, number> = {}
@@ -190,19 +193,19 @@ export function applyCatalogSnapshot(draft: CatalogDraft, state: DiscoveryState)
     for (const [catalogKey, catalogModel] of Array.from(record.models.entries())) {
       const runtimeModel = runtime.get(asString(catalogModel.modelID))
       if (runtimeModel === undefined) {
-        draft.model.remove(KIRO_PROVIDER_ID, catalogKey)
+        editor.models.remove(KIRO_PROVIDER_ID, catalogKey)
         continue
       }
-      draft.model.update(KIRO_PROVIDER_ID, catalogKey, (model) => {
+      editor.models.update(KIRO_PROVIDER_ID, catalogKey, (model) => {
         applyEfforts(model, runtimeModel)
         if (model.limit.context > 0) contextWindows[asString(model.modelID)] = model.limit.context
       })
     }
   } else {
     // fallback: publish only models actually returned by the runtime; the
-    // draft initializes missing records before the callback runs (upsert)
+    // editor initializes missing records before the callback runs (upsert)
     for (const runtimeModel of snapshot) {
-      draft.model.update(KIRO_PROVIDER_ID, runtimeModel.modelId, (model) => {
+      editor.models.update(KIRO_PROVIDER_ID, runtimeModel.modelId, (model) => {
         model.name = runtimeModel.name || runtimeModel.modelId
         model.modelID = runtimeModel.modelId as Model.ID
         applyEfforts(model, runtimeModel)
@@ -211,7 +214,7 @@ export function applyCatalogSnapshot(draft: CatalogDraft, state: DiscoveryState)
     }
   }
 
-  draft.provider.update(KIRO_PROVIDER_ID, (provider) => {
+  editor.update(KIRO_PROVIDER_ID, (provider: MutableProvider) => {
     provider.name = KIRO_INTEGRATION_NAME
     provider.integrationID = KIRO_INTEGRATION_ID as Integration.ID
     provider.package = KIRO_PROVIDER_PACKAGE
@@ -244,7 +247,7 @@ export function applyCatalogSnapshot(draft: CatalogDraft, state: DiscoveryState)
 // `connection.active("kiro")` + `gen === state.generation`, read immediately
 // before the attempt runs (and re-read after the `connection.active` await).
 // Either check failing ends the chain silently: the plugin keeps working
-// without a runtime catalog and nothing is thrown out of setup or the event
+// without a runtime inventory and nothing is thrown out of setup or the event
 // consumer. The chain is also ended by backoff exhaustion (after the last
 // step) and by cleanup (timer cleared). A new discover() cancels the pending
 // retry before it starts its own probe, so at most one attempt chain exists
@@ -270,7 +273,7 @@ export function createDiscover(
     }
     cancelRetry(state)
     state.snapshot = discovered
-    await context.catalog.reload()
+    await context.provider.reload()
   }
 
   // rejects once the probe deadline passes. The SDK promise cannot be
@@ -349,7 +352,7 @@ export function createDiscover(
       cancelRetry(state)
       state.generation += 1
       state.snapshot = undefined
-      await context.catalog.reload()
+      await context.provider.reload()
       return
     }
 
@@ -422,7 +425,7 @@ async function consumeEvents(
   }
 }
 
-// register the catalog transform + event consumer and kick off one coalesced
+// register the provider transform + event consumer and kick off one coalesced
 // initial discovery when Kiro is already connected and `options.discover` is
 // not false. Returns one disposer that invalidates pending generations, clears
 // the probe/retry timers, stops/awaits the event consumer, and unregisters the
@@ -450,8 +453,8 @@ export async function registerDiscovery(
 
   const discover = createDiscover(context, state)
 
-  const registration = await context.catalog.transform((draft) =>
-    applyCatalogSnapshot(draft, state),
+  const registration = await context.provider.transform((editor) =>
+    applyProviderSnapshot(editor, state),
   )
   resources.disposeTransform = registration.dispose
 

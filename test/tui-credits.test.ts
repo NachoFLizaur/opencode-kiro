@@ -5,17 +5,24 @@ import {
   creditsChipText,
   creditsForMessage,
   formatCredits,
-  formatStallSummary,
   messageCredits,
   readPartCredits,
   spendLines,
-  stallReason,
   sumSessionCredits,
-  STALL_SEPARATOR,
   type CreditMessage,
   type CreditPart,
   type SessionCredits,
 } from "../src/tui/credits"
+import {
+  LOGOUT_DIALOG_MESSAGE,
+  LOGOUT_DIALOG_TITLE,
+  PROVIDER_CONNECT_COMMAND,
+  createLogoutWatcher,
+  kiroCredentialIDs,
+  readLogoutStage,
+  type LogoutIntegration,
+  type LogoutLocation,
+} from "../src/tui/logout"
 
 // Credit-helper + TUI wiring tests. Fixtures are plain content-part shaped
 // objects carrying key-unwrapped state (`part.state.credits` /
@@ -277,45 +284,10 @@ describe("spendLines", () => {
   })
 })
 
-/** Shape of the last ERROR line kiro-cli writes to its chat log (ANSI already stripped). */
-const OVERLOADED_HINT =
-  "2026-09-03T18:21:04.508113Z ERROR chat_cli_v2::agent::rts: 245: failed to send rts request err=ConverseStreamError { status_code: Some(500), kind: ModelOverloadedError }"
-
-describe("stall summary formatting", () => {
-  test("stallReason prefers the kind token, falls back to the first error-kind word, drops the Error suffix", () => {
-    expect(stallReason(OVERLOADED_HINT)).toBe("ModelOverloaded")
-    expect(stallReason("err=ConverseStreamError { status_code: Some(500) }")).toBe("ConverseStream")
-    expect(stallReason("kind: Throttling")).toBe("Throttling") // no suffix to drop
-    expect(stallReason("request failed with status 500")).toBeUndefined() // nothing recognizable
-    expect(stallReason("")).toBeUndefined()
-    expect(stallReason(undefined)).toBeUndefined()
-  })
-
-  test("formatStallSummary rounds to whole seconds (never below 1) and appends the reason when known", () => {
-    expect(formatStallSummary({ stalledMs: 66_000, hint: OVERLOADED_HINT })).toBe("last turn stalled 66s (ModelOverloaded)")
-    expect(formatStallSummary({ stalledMs: 66_000 })).toBe("last turn stalled 66s")
-    expect(formatStallSummary({ stalledMs: 66_000, hint: "status 500" })).toBe("last turn stalled 66s") // unusable hint
-    expect(formatStallSummary({ stalledMs: 1_500 })).toBe("last turn stalled 2s")
-    expect(formatStallSummary({ stalledMs: 200 })).toBe("last turn stalled 1s")
-  })
-
-  test("formatStallSummary yields nothing for absent or malformed status and never throws", () => {
-    for (const status of [undefined, null, {}, "bad", 66_000, { stalledMs: 0 }, { stalledMs: -1 }, { stalledMs: "66" }, { hint: "x" }]) {
-      expect(() => formatStallSummary(status)).not.toThrow()
-      expect(formatStallSummary(status)).toBeUndefined()
-    }
-  })
-
-  test("creditsChipText joins the total and the summary on one line; collapses without kiro metadata", () => {
-    const stalled: SessionCredits = { total: 2, unit: "credit", present: true, status: { stalledMs: 66_000, hint: OVERLOADED_HINT } }
-    expect(creditsChipText(stalled)).toBe(`2 credits${STALL_SEPARATOR}last turn stalled 66s (ModelOverloaded)`)
-    expect(creditsChipText(stalled)).not.toContain("\n")
-
+describe("creditsChipText", () => {
+  test("renders the formatted total; collapses without kiro credits", () => {
     expect(creditsChipText({ total: 2, unit: "credit", present: true })).toBe("2 credits")
-    // a stalled turn that reported no credits still shows the summary next to the zero total
-    expect(creditsChipText({ total: 0, unit: undefined, present: true, status: { stalledMs: 40_000 } })).toBe(
-      `0${STALL_SEPARATOR}last turn stalled 40s`,
-    )
+    expect(creditsChipText({ total: 0, unit: undefined, present: true })).toBe("0")
     expect(creditsChipText({ total: 0, unit: undefined, present: false })).toBe("")
   })
 })
@@ -397,7 +369,10 @@ interface SlotRegistration {
 
 interface MockTuiContext {
   context: {
-    ui: { slot: (...args: unknown[]) => () => void }
+    ui: {
+      slot: (...args: unknown[]) => () => void
+      dialog?: { confirm: ReturnType<typeof vi.fn> }
+    }
     data: {
       on: (event: string, handler: (event: unknown) => void) => () => void
       session: {
@@ -406,7 +381,17 @@ interface MockTuiContext {
           sync: ReturnType<typeof vi.fn>
         }
       }
+      location?: {
+        integration: {
+          invalidate: ReturnType<typeof vi.fn>
+          sync: ReturnType<typeof vi.fn>
+          list: ReturnType<typeof vi.fn>
+        }
+      }
     }
+    client?: { credential: { remove: ReturnType<typeof vi.fn> } }
+    keymap?: { dispatch: ReturnType<typeof vi.fn> }
+    location?: LogoutLocation
     theme?: unknown
     storage?: { memory: ReturnType<typeof vi.fn> }
   }
@@ -415,6 +400,35 @@ interface MockTuiContext {
   listeners: Array<{ event: string; handler: (event: unknown) => void; unsubscribeCalls: number }>
   sync: ReturnType<typeof vi.fn>
   memoryStores: Map<string, unknown>
+  /** logout surfaces (present when `withLogout` was requested) */
+  logout?: LogoutSurfaces
+}
+
+/** Spies behind the credential/dialog/keymap/integration surfaces the logout watcher uses. */
+interface LogoutSurfaces {
+  remove: ReturnType<typeof vi.fn<(input: unknown) => Promise<unknown>>>
+  confirm: ReturnType<typeof vi.fn<(options: unknown) => Promise<boolean | undefined>>>
+  dispatch: ReturnType<typeof vi.fn<(id: string) => void>>
+  integrationInvalidate: ReturnType<typeof vi.fn<(location?: LogoutLocation) => void>>
+  integrationSync: ReturnType<typeof vi.fn<(location?: LogoutLocation) => Promise<void>>>
+  integrationList: ReturnType<typeof vi.fn<(location?: LogoutLocation) => ReadonlyArray<LogoutIntegration> | undefined>>
+  /** replace the integration list every `list()` call returns */
+  setIntegrations: (integrations: ReadonlyArray<LogoutIntegration> | undefined) => void
+}
+
+const makeLogoutSurfaces = (): LogoutSurfaces => {
+  let integrations: ReadonlyArray<LogoutIntegration> | undefined = []
+  return {
+    remove: vi.fn(async (_input: unknown) => ({}) as unknown),
+    confirm: vi.fn(async (_options: unknown): Promise<boolean | undefined> => undefined),
+    dispatch: vi.fn((_id: string) => {}),
+    integrationInvalidate: vi.fn((_location?: LogoutLocation) => {}),
+    integrationSync: vi.fn(async (_location?: LogoutLocation) => {}),
+    integrationList: vi.fn((_location?: LogoutLocation) => integrations),
+    setIntegrations: (next) => {
+      integrations = next
+    },
+  }
 }
 
 /**
@@ -423,13 +437,15 @@ interface MockTuiContext {
  * table. `failUnregisterOf` makes that claim path's disposer throw (cleanup
  * aggregation). `theme` (feature-detected tokens) and `withMemoryStorage`
  * (TUI `storage.memory`) are opt-in — both absent by default so the fallback
- * paths stay the baseline under test.
+ * paths stay the baseline under test. `withLogout` adds the credential,
+ * dialog, keymap and integration surfaces the logout watcher drives.
  */
 const makeTuiContext = (options?: {
   messages?: Record<string, ReadonlyArray<FixtureMessage>>
   failUnregisterOf?: string
   theme?: unknown
   withMemoryStorage?: boolean
+  withLogout?: { location?: LogoutLocation }
 }): MockTuiContext => {
   const slots: SlotRegistration[] = []
   const slotCalls: unknown[][] = []
@@ -473,7 +489,22 @@ const makeTuiContext = (options?: {
       }),
     }
   }
-  return { context, slots, slotCalls, listeners, sync, memoryStores }
+  let logout: LogoutSurfaces | undefined
+  if (options?.withLogout) {
+    logout = makeLogoutSurfaces()
+    context.ui.dialog = { confirm: logout.confirm }
+    context.client = { credential: { remove: logout.remove } }
+    context.keymap = { dispatch: logout.dispatch }
+    context.data.location = {
+      integration: {
+        invalidate: logout.integrationInvalidate,
+        sync: logout.integrationSync,
+        list: logout.integrationList,
+      },
+    }
+    if (options.withLogout.location) context.location = options.withLogout.location
+  }
+  return { context, slots, slotCalls, listeners, sync, memoryStores, logout }
 }
 
 /** Load the TUI plugin (box view mocked above) and run setup against a mock context. */
@@ -500,7 +531,7 @@ const renderSidebar = (mock: MockTuiContext, props: Record<string, unknown>): ((
   renderSlot(mock, "sidebar.content", props) as () => FakeViewNode | null
 
 describe("tui setup registrations", () => {
-  test("setup registers two append claims (sidebar.content + prompt.footer.status) and the text/reasoning ended listeners", async () => {
+  test("setup registers two append claims (sidebar.content + prompt.footer.status) and three listeners (text/reasoning ended, integration.updated)", async () => {
     const mock = makeTuiContext()
 
     const cleanup = await setupPlugin(mock)
@@ -512,9 +543,13 @@ describe("tui setup registrations", () => {
       expect(Object.keys(slot.claim).sort()).toEqual(["append", "render"])
       expect(typeof slot.claim.render).toBe("function")
     }
-    // credits and stall status ride whichever part closes the turn, so both ended
-    // events feed the same recording path
-    expect(mock.listeners.map((listener) => listener.event)).toEqual(["session.text.ended", "session.reasoning.ended"])
+    // credits ride whichever part closes the turn, so both ended events feed the same
+    // recording path; integration.updated drives the logout dialog
+    expect(mock.listeners.map((listener) => listener.event)).toEqual([
+      "session.text.ended",
+      "session.reasoning.ended",
+      "integration.updated",
+    ])
     await cleanup()
   })
 
@@ -668,9 +703,7 @@ describe("footer chip claim (prompt.footer.status)", () => {
   })
 })
 
-describe("stall summary on the credits surfaces", () => {
-  const STALLED_STATE = { credits: 2, creditsUnit: "credit", status: { stalledMs: 66_000, hint: OVERLOADED_HINT } }
-
+describe("credits carried by the reasoning-ended event", () => {
   const chipText = (mock: MockTuiContext): string | null => {
     const chip = (renderSlot(mock, "prompt.footer.status", { sessionID: "sess", mode: "normal" }) as () => FakeDomNode | null)()
     return chip === null ? null : (chip.children[0] as () => string)()
@@ -697,114 +730,600 @@ describe("stall summary on the credits surfaces", () => {
     })
   }
 
-  test("chip and box render the last turn's stall summary with the seconds and the reason", async () => {
-    const mock = makeTuiContext({
-      messages: { sess: [{ id: "msg_1", type: "assistant", content: [statePart("text", STALLED_STATE)] }] },
-    })
-    const cleanup = await setupPlugin(mock)
-
-    const chip = chipText(mock)
-    expect(chip).toBe("2 credits · last turn stalled 66s (ModelOverloaded)")
-    expect(chip).toContain("66s")
-    expect(chip).toContain("ModelOverloaded")
-    expect(chip).not.toContain("\n")
-
-    // box: header, total, then the summary on its own third line
-    expect(await boxLines(mock)).toEqual(["Kiro", "2 credits", "last turn stalled 66s (ModelOverloaded)"])
-    await cleanup()
-  })
-
-  test("absent or malformed status shows no summary, the credits stay, and nothing throws", async () => {
-    const states: Array<Record<string, unknown>> = [
-      { credits: 1, creditsUnit: "credit" },
-      { credits: 1, creditsUnit: "credit", status: {} },
-      { credits: 1, creditsUnit: "credit", status: "bad" },
-      { credits: 1, creditsUnit: "credit", status: { stalledMs: 0 } },
-      { credits: 1, creditsUnit: "credit", status: { stalledMs: "66" } },
-    ]
-    for (const state of states) {
-      const mock = makeTuiContext({
-        messages: { sess: [{ id: "msg_1", type: "assistant", content: [statePart("text", state)] }] },
-      })
-      const cleanup = await setupPlugin(mock)
-
-      expect(chipText(mock)).toBe("1 credit")
-      expect(await boxLines(mock)).toEqual(["Kiro", "1 credit", ""]) // third line stays empty
-      // a live event carrying the same malformed status is swallowed too
-      const handler = mock.listeners[0]!.handler
-      expect(() => handler({ data: { sessionID: "sess", assistantMessageID: "msg_1", ordinal: 1, state } })).not.toThrow()
-      expect(chipText(mock)).toBe("1 credit")
-      await cleanup()
-    }
-  })
-
-  test("status without credits is recorded from the ended event and the summary still renders", async () => {
-    // durable text part without state (live reducer drops it); the ended event carries only a status
-    const mock = makeTuiContext({
-      messages: { sess: [{ id: "msg_1", type: "assistant", content: [{ type: "text", text: "live" }] }] },
-    })
-    const cleanup = await setupPlugin(mock)
-    expect(chipText(mock)).toBeNull() // nothing recorded yet
-
-    const textEnded = mock.listeners.find((listener) => listener.event === "session.text.ended")!
-    textEnded.handler({ data: { sessionID: "sess", assistantMessageID: "msg_1", ordinal: 0, state: { status: { stalledMs: 40_000 } } } })
-
-    // the surfaces appear on status alone: a stalled turn is kiro metadata even without credits
-    expect(chipText(mock)).toBe("0 · last turn stalled 40s")
-    expect(renderSidebar(mock, { sessionID: "sess" })()!.credits()).toEqual({
-      total: 0,
-      unit: undefined,
-      present: true,
-      status: { stalledMs: 40_000 },
-    })
-    await cleanup()
-  })
-
-  test("status carried only by the reasoning-ended event is recorded and rendered", async () => {
+  test("credits carried only by the reasoning-ended event are recorded and rendered", async () => {
     // a stall notice still open at turn end: the SDK closes that reasoning part with the
-    // metadata and no text-ended event carries it
+    // credits and no text-ended event carries them
     const mock = makeTuiContext({
       messages: {
         sess: [{ id: "msg_1", type: "assistant", content: [{ type: "reasoning", text: "Kiro: no output for 30s" }, { type: "text", text: "answer" }] }],
       },
     })
     const cleanup = await setupPlugin(mock)
+    expect(chipText(mock)).toBeNull() // nothing recorded yet
     const reasoningEnded = mock.listeners.find((listener) => listener.event === "session.reasoning.ended")
     expect(reasoningEnded).toBeDefined()
 
     reasoningEnded!.handler({
-      data: { sessionID: "sess", assistantMessageID: "msg_1", ordinal: 0, state: STALLED_STATE },
+      data: { sessionID: "sess", assistantMessageID: "msg_1", ordinal: 0, state: { credits: 2, creditsUnit: "credit" } },
     })
 
-    expect(chipText(mock)).toBe("2 credits · last turn stalled 66s (ModelOverloaded)")
-    expect(await boxLines(mock)).toEqual(["Kiro", "2 credits", "last turn stalled 66s (ModelOverloaded)"])
-    await cleanup()
-  })
-
-  test("a clean later turn clears the stall summary while the credits keep summing", async () => {
-    const messages: Record<string, FixtureMessage[]> = {
-      sess: [{ id: "msg_1", type: "assistant", content: [statePart("text", STALLED_STATE)] }],
-    }
-    const mock = makeTuiContext({ messages })
-    const cleanup = await setupPlugin(mock)
-    expect(chipText(mock)).toBe("2 credits · last turn stalled 66s (ModelOverloaded)")
-
-    // the next turn completes without a stall (durable message appended)
-    messages.sess!.push({ id: "msg_2", type: "assistant", content: [statePart("text", { credits: 3, creditsUnit: "credit" })] })
-
-    expect(chipText(mock)).toBe("5 credits")
-    expect(chipText(mock)).not.toContain("stalled")
-    expect(await boxLines(mock)).toEqual(["Kiro", "5 credits", ""])
-
-    // and a stall on the following turn brings the summary back for that turn only
-    messages.sess!.push({ id: "msg_3", type: "assistant", content: [statePart("text", { credits: 1, creditsUnit: "credit", status: { stalledMs: 30_000 } })] })
-    expect(chipText(mock)).toBe("6 credits · last turn stalled 30s")
+    expect(chipText(mock)).toBe("2 credits")
+    // box: header and total only
+    expect(await boxLines(mock)).toEqual(["Kiro", "2 credits"])
     await cleanup()
   })
 })
 
+// ---------------------------------------------------------------------------
+// logout dialog: the `integration.updated` watcher over the kiroLoggedOut flag
+// ---------------------------------------------------------------------------
+
+/** kiro integration fixture carrying the given stage (or no flag) and connections */
+const kiroIntegration = (
+  stage: "suspected" | "confirmed" | undefined,
+  connections: LogoutIntegration["connections"] = [{ type: "credential", id: "cred-1" }],
+): LogoutIntegration => ({
+  id: "kiro",
+  ...(stage === undefined ? {} : { metadata: { kiroLoggedOut: { stage } } }),
+  connections,
+})
+
+const TWO_CREDENTIALS: LogoutIntegration["connections"] = [
+  { type: "credential", id: "cred-1" },
+  { type: "env", id: "env-1" },
+  { type: "credential", id: "cred-2" },
+]
+
+const LOCATION: LogoutLocation = { directory: "/work/project", workspaceID: "ws-main" }
+
+/** let the watcher's promise chains (invalidate -> sync -> list -> dialog/removal -> dispatch) settle */
+const settle = async (): Promise<void> => {
+  for (let i = 0; i < 6; i++) await new Promise<void>((resolve) => setImmediate(resolve))
+}
+
+/** watcher over a standalone logout context; `answer(value)` resolves the open dialog */
+const makeWatcher = (options: { location?: LogoutLocation } = { location: LOCATION }) => {
+  const location = options.location
+  const surfaces = makeLogoutSurfaces()
+  const answers: Array<(value: boolean | undefined) => void> = []
+  surfaces.confirm.mockImplementation(
+    () =>
+      new Promise<boolean | undefined>((resolve) => {
+        answers.push(resolve)
+      }),
+  )
+  const context = {
+    location,
+    client: { credential: { remove: surfaces.remove } },
+    data: {
+      location: {
+        integration: {
+          invalidate: surfaces.integrationInvalidate,
+          sync: surfaces.integrationSync,
+          list: surfaces.integrationList,
+        },
+      },
+    },
+    ui: { dialog: { confirm: surfaces.confirm } },
+    keymap: { dispatch: surfaces.dispatch },
+  }
+  const watcher = createLogoutWatcher(context)
+  return {
+    ...surfaces,
+    watcher,
+    /** publish one update for the given stage/connections and settle */
+    update: async (
+      stage: "suspected" | "confirmed" | undefined,
+      connections?: LogoutIntegration["connections"],
+      event: { location?: LogoutLocation } = {},
+    ): Promise<void> => {
+      surfaces.setIntegrations([kiroIntegration(stage, connections)])
+      watcher.handle(event)
+      await settle()
+    },
+    /** answer the oldest open dialog and settle */
+    answer: async (value: boolean | undefined): Promise<void> => {
+      const resolve = answers.shift()
+      if (resolve === undefined) throw new Error("no dialog open to answer")
+      resolve(value)
+      await settle()
+    },
+    openDialogs: () => answers.length,
+  }
+}
+
+/** Each processed update invalidates its resolved location before the matching sync. */
+const expectIntegrationRefreshes = (surfaces: LogoutSurfaces, locations: Array<LogoutLocation | undefined>): void => {
+  const calls = locations.map((location) => [location])
+  expect(surfaces.integrationInvalidate.mock.calls).toEqual(calls)
+  expect(surfaces.integrationSync.mock.calls).toEqual(calls)
+  for (const [index] of locations.entries()) {
+    expect(surfaces.integrationInvalidate.mock.invocationCallOrder[index]).toBeLessThan(
+      surfaces.integrationSync.mock.invocationCallOrder[index]!,
+    )
+    if (index > 0) {
+      expect(surfaces.integrationInvalidate.mock.invocationCallOrder[index]).toBeGreaterThan(
+        surfaces.integrationSync.mock.invocationCallOrder[index - 1]!,
+      )
+    }
+  }
+}
+
+describe("logout watcher: reading the flag", () => {
+  test("readLogoutStage reads only the kiro integration's staged flag", () => {
+    expect(readLogoutStage([kiroIntegration("suspected")])).toBe("suspected")
+    expect(readLogoutStage([kiroIntegration("confirmed")])).toBe("confirmed")
+    expect(readLogoutStage([kiroIntegration(undefined)])).toBeUndefined()
+    expect(readLogoutStage(undefined)).toBeUndefined()
+    expect(readLogoutStage([])).toBeUndefined()
+    // other integrations carrying the key are not kiro
+    expect(readLogoutStage([{ id: "other", metadata: { kiroLoggedOut: { stage: "confirmed" } }, connections: [] }])).toBeUndefined()
+    // unknown shapes read as "not logged out"
+    expect(readLogoutStage([{ id: "kiro", metadata: { kiroLoggedOut: true }, connections: [] }])).toBeUndefined()
+    expect(readLogoutStage([{ id: "kiro", metadata: { kiroLoggedOut: { stage: "weird" } }, connections: [] }])).toBeUndefined()
+    expect(readLogoutStage([{ id: "kiro", metadata: { kiroLoggedOut: "suspected" }, connections: [] }])).toBeUndefined()
+  })
+
+  test("kiroCredentialIDs lists only credential connections with an id", () => {
+    expect(kiroCredentialIDs([kiroIntegration("suspected", TWO_CREDENTIALS)])).toEqual(["cred-1", "cred-2"])
+    expect(kiroCredentialIDs([kiroIntegration("suspected", [{ type: "credential" }, { type: "env", id: "e" }])])).toEqual([])
+    expect(kiroCredentialIDs([{ id: "other", connections: [{ type: "credential", id: "x" }] }])).toEqual([])
+    expect(kiroCredentialIDs(undefined)).toEqual([])
+  })
+
+})
+
+describe("logout watcher: suspected stage", () => {
+  test("shows the confirm dialog once, with the documented title and message, after syncing", async () => {
+    const w = makeWatcher()
+
+    await w.update("suspected")
+
+    expect(w.integrationSync).toHaveBeenCalledTimes(1)
+    expect(w.integrationSync).toHaveBeenCalledWith(LOCATION)
+    expectIntegrationRefreshes(w, [LOCATION])
+    expect(w.confirm).toHaveBeenCalledTimes(1)
+    expect(w.confirm).toHaveBeenCalledWith({ title: LOGOUT_DIALOG_TITLE, message: LOGOUT_DIALOG_MESSAGE })
+    expect(LOGOUT_DIALOG_TITLE).toBe("Kiro CLI is logged out")
+    expect(LOGOUT_DIALOG_MESSAGE).toBe("Reconnect now?")
+    // nothing destructive before the user answers
+    expect(w.remove).not.toHaveBeenCalled()
+    expect(w.dispatch).not.toHaveBeenCalled()
+  })
+
+  test("repeated suspected updates never re-prompt within the episode", async () => {
+    const w = makeWatcher()
+
+    await w.update("suspected")
+    await w.update("suspected")
+    await w.update("suspected")
+
+    expect(w.integrationSync).toHaveBeenCalledTimes(3)
+    expectIntegrationRefreshes(w, [LOCATION, LOCATION, LOCATION])
+    expect(w.confirm).toHaveBeenCalledTimes(1)
+  })
+
+  test("confirm removes every kiro credential connection by id only, then opens connect", async () => {
+    const w = makeWatcher()
+    await w.update("suspected", TWO_CREDENTIALS)
+
+    await w.answer(true)
+
+    expect(w.remove).toHaveBeenCalledTimes(2)
+    expect(w.remove).toHaveBeenNthCalledWith(1, {
+      credentialID: "cred-1",
+    })
+    expect(w.remove).toHaveBeenNthCalledWith(2, {
+      credentialID: "cred-2",
+    })
+    expect(w.dispatch).toHaveBeenCalledTimes(1)
+    expect(w.dispatch).toHaveBeenCalledWith(PROVIDER_CONNECT_COMMAND)
+    expect(PROVIDER_CONNECT_COMMAND).toBe("provider.connect")
+    // removals finish before the connect dialog opens
+    const lastRemoval = Math.max(...w.remove.mock.invocationCallOrder)
+    expect(w.dispatch.mock.invocationCallOrder[0]).toBeGreaterThan(lastRemoval)
+  })
+
+  test("confirm with no credential connections left still opens connect", async () => {
+    const w = makeWatcher()
+    await w.update("suspected", [{ type: "env", id: "env-1" }])
+
+    await w.answer(true)
+
+    expect(w.remove).not.toHaveBeenCalled()
+    expect(w.dispatch).toHaveBeenCalledWith(PROVIDER_CONNECT_COMMAND)
+  })
+
+  test("cancel does nothing", async () => {
+    const w = makeWatcher()
+    await w.update("suspected", TWO_CREDENTIALS)
+
+    await w.answer(false)
+
+    expect(w.remove).not.toHaveBeenCalled()
+    expect(w.dispatch).not.toHaveBeenCalled()
+    // and the episode stays answered: no second prompt on the next resync
+    await w.update("suspected", TWO_CREDENTIALS)
+    expect(w.confirm).toHaveBeenCalledTimes(1)
+  })
+
+  test("a dismissed dialog (undefined) counts as cancel", async () => {
+    const w = makeWatcher()
+    await w.update("suspected")
+
+    await w.answer(undefined)
+
+    expect(w.remove).not.toHaveBeenCalled()
+    expect(w.dispatch).not.toHaveBeenCalled()
+  })
+
+  test("the event location wins over the context location for integration invalidate, sync and list", async () => {
+    const w = makeWatcher()
+    const eventLocation: LogoutLocation = { directory: "/other" }
+
+    await w.update("suspected", undefined, { location: eventLocation })
+    await w.answer(true)
+
+    expect(w.integrationSync).toHaveBeenCalledWith(eventLocation)
+    expectIntegrationRefreshes(w, [eventLocation])
+    expect(w.integrationList).toHaveBeenCalledWith(eventLocation)
+    expect(w.remove).toHaveBeenCalledWith({ credentialID: "cred-1" })
+  })
+
+  test("without any location the removal request carries only the credential id", async () => {
+    const w = makeWatcher({})
+
+    await w.update("suspected")
+    await w.answer(true)
+
+    expect(w.integrationSync).toHaveBeenCalledWith(undefined)
+    expectIntegrationRefreshes(w, [undefined])
+    expect(w.remove).toHaveBeenCalledWith({ credentialID: "cred-1" })
+    expect(w.dispatch).toHaveBeenCalledWith(PROVIDER_CONNECT_COMMAND)
+  })
+})
+
+describe("logout watcher: confirmed stage", () => {
+  test("an unlocated update refreshes a cached logged-in integration before reading the confirmed flag", async () => {
+    const w = makeWatcher()
+    let invalidated = false
+    w.setIntegrations([kiroIntegration(undefined)])
+    w.integrationInvalidate.mockImplementation(() => {
+      invalidated = true
+    })
+    w.integrationSync.mockImplementation(async () => {
+      // Like the host, a loaded collection's sync is a no-op until invalidated.
+      if (!invalidated) return
+      w.setIntegrations([kiroIntegration("confirmed")])
+      invalidated = false
+    })
+
+    w.watcher.handle({})
+    await settle()
+
+    expectIntegrationRefreshes(w, [LOCATION])
+    expect(w.integrationList.mock.invocationCallOrder[0]).toBeGreaterThan(
+      w.integrationSync.mock.invocationCallOrder[0]!,
+    )
+    expect(w.remove).toHaveBeenCalledWith({ credentialID: "cred-1" })
+    expect(w.confirm).toHaveBeenCalledTimes(1)
+  })
+
+  test("removes the credential connections once and shows the dialog when it was not shown yet", async () => {
+    const w = makeWatcher()
+
+    await w.update("confirmed", TWO_CREDENTIALS)
+
+    expect(w.remove).toHaveBeenCalledTimes(2)
+    expect(w.remove.mock.calls).toEqual([[{ credentialID: "cred-1" }], [{ credentialID: "cred-2" }]])
+    expect(w.confirm).toHaveBeenCalledTimes(1)
+    expect(w.dispatch).not.toHaveBeenCalled()
+  })
+
+  test("repeated confirmed updates neither remove again nor re-prompt", async () => {
+    const w = makeWatcher()
+
+    await w.update("confirmed", TWO_CREDENTIALS)
+    await w.update("confirmed", TWO_CREDENTIALS)
+    await w.update("confirmed", TWO_CREDENTIALS)
+
+    expect(w.remove).toHaveBeenCalledTimes(2)
+    expect(w.confirm).toHaveBeenCalledTimes(1)
+  })
+
+  test("suspected then confirmed: the open dialog is not shown again and removal happens once", async () => {
+    const w = makeWatcher()
+    await w.update("suspected", TWO_CREDENTIALS)
+    expect(w.confirm).toHaveBeenCalledTimes(1)
+    expect(w.openDialogs()).toBe(1)
+
+    // the follow-up probe confirmed while the dialog is still open
+    await w.update("confirmed", TWO_CREDENTIALS)
+
+    expect(w.confirm).toHaveBeenCalledTimes(1)
+    expect(w.remove).toHaveBeenCalledTimes(2)
+
+    // the user then confirms: no second removal, just the connect dialog
+    await w.answer(true)
+    expect(w.remove).toHaveBeenCalledTimes(2)
+    expect(w.dispatch).toHaveBeenCalledTimes(1)
+  })
+
+  test("confirm after an automatic removal does not remove again", async () => {
+    const w = makeWatcher()
+    await w.update("confirmed", TWO_CREDENTIALS)
+    expect(w.remove).toHaveBeenCalledTimes(2)
+
+    await w.answer(true)
+
+    expect(w.remove).toHaveBeenCalledTimes(2)
+    expect(w.dispatch).toHaveBeenCalledTimes(1)
+  })
+
+  test("confirmed after a confirmed suspected dialog removes nothing further", async () => {
+    const w = makeWatcher()
+    await w.update("suspected", TWO_CREDENTIALS)
+    await w.answer(true)
+    expect(w.remove).toHaveBeenCalledTimes(2)
+    expect(w.dispatch).toHaveBeenCalledTimes(1)
+
+    await w.update("confirmed", TWO_CREDENTIALS)
+
+    expect(w.remove).toHaveBeenCalledTimes(2)
+    expect(w.confirm).toHaveBeenCalledTimes(1)
+    expect(w.dispatch).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe("logout watcher: episodes and re-arming", () => {
+  test("an update without the flag ends the episode; the next suspected prompts again", async () => {
+    const w = makeWatcher()
+    await w.update("suspected")
+    await w.answer(false)
+    expect(w.confirm).toHaveBeenCalledTimes(1)
+
+    await w.update(undefined)
+    await w.update("suspected")
+
+    expect(w.confirm).toHaveBeenCalledTimes(2)
+  })
+
+  test("a new episode after confirmed removes again", async () => {
+    const w = makeWatcher()
+    await w.update("confirmed")
+    expect(w.remove).toHaveBeenCalledTimes(1)
+
+    await w.update(undefined)
+    await w.update("confirmed")
+
+    expect(w.remove).toHaveBeenCalledTimes(2)
+    expect(w.confirm).toHaveBeenCalledTimes(2)
+  })
+
+  test("a confirm that arrives after the episode ended is ignored", async () => {
+    const w = makeWatcher()
+    await w.update("suspected", TWO_CREDENTIALS)
+    expect(w.openDialogs()).toBe(1)
+
+    // kiro-cli logged back in before the user answered
+    await w.update(undefined, TWO_CREDENTIALS)
+    await w.answer(true)
+
+    expect(w.remove).not.toHaveBeenCalled()
+    expect(w.dispatch).not.toHaveBeenCalled()
+  })
+
+  test("a confirm that arrives after dispose is ignored, and disposed watchers drop updates", async () => {
+    const w = makeWatcher()
+    await w.update("suspected", TWO_CREDENTIALS)
+
+    w.watcher.dispose()
+    await w.answer(true)
+    await w.update("confirmed", TWO_CREDENTIALS)
+
+    expect(w.remove).not.toHaveBeenCalled()
+    expect(w.dispatch).not.toHaveBeenCalled()
+    expect(w.integrationSync).toHaveBeenCalledTimes(1)
+    expect(w.confirm).toHaveBeenCalledTimes(1)
+  })
+
+  test("dispose while the sync is in flight stops the update before it reads the flag", async () => {
+    const w = makeWatcher()
+    let releaseSync!: () => void
+    w.integrationSync.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseSync = resolve
+        }),
+    )
+    w.setIntegrations([kiroIntegration("confirmed")])
+    w.watcher.handle({})
+    await settle()
+
+    w.watcher.dispose()
+    releaseSync()
+    await settle()
+
+    expect(w.integrationList).not.toHaveBeenCalled()
+    expect(w.remove).not.toHaveBeenCalled()
+    expect(w.confirm).not.toHaveBeenCalled()
+  })
+
+  test("episodes are tracked per location", async () => {
+    const w = makeWatcher()
+    const other: LogoutLocation = { directory: "/elsewhere" }
+
+    await w.update("suspected")
+    await w.update("suspected", undefined, { location: other })
+
+    expect(w.confirm).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe("logout watcher: failures and unrelated updates", () => {
+  test("a throwing invalidate never throws and later updates still work", async () => {
+    const w = makeWatcher()
+    w.integrationInvalidate.mockImplementationOnce(() => {
+      throw new Error("invalidate failed")
+    })
+
+    expect(() => w.watcher.handle({})).not.toThrow()
+    await settle()
+    expect(w.integrationSync).not.toHaveBeenCalled()
+    expect(w.confirm).not.toHaveBeenCalled()
+
+    await w.update("suspected")
+    expect(w.confirm).toHaveBeenCalledTimes(1)
+  })
+
+  test("a rejecting sync never throws and later updates still work", async () => {
+    const w = makeWatcher()
+    w.integrationSync.mockRejectedValueOnce(new Error("sync failed"))
+
+    expect(() => w.watcher.handle({})).not.toThrow()
+    await settle()
+    expect(w.confirm).not.toHaveBeenCalled()
+
+    await w.update("suspected")
+    expect(w.confirm).toHaveBeenCalledTimes(1)
+  })
+
+  test("a throwing list never throws and later updates still work", async () => {
+    const w = makeWatcher()
+    w.integrationList.mockImplementationOnce(() => {
+      throw new Error("list failed")
+    })
+
+    expect(() => w.watcher.handle({})).not.toThrow()
+    await settle()
+    expect(w.confirm).not.toHaveBeenCalled()
+
+    await w.update("suspected")
+    expect(w.confirm).toHaveBeenCalledTimes(1)
+  })
+
+  test("a rejecting credential removal is skipped; the others proceed and connect still opens", async () => {
+    const w = makeWatcher()
+    w.remove.mockRejectedValueOnce(new Error("remove failed"))
+    await w.update("suspected", TWO_CREDENTIALS)
+
+    await w.answer(true)
+
+    expect(w.remove).toHaveBeenCalledTimes(2)
+    expect(w.dispatch).toHaveBeenCalledTimes(1)
+  })
+
+  test("a rejecting dialog never throws and does not remove anything", async () => {
+    const w = makeWatcher()
+    w.confirm.mockRejectedValueOnce(new Error("dialog failed"))
+
+    await w.update("suspected")
+
+    expect(w.remove).not.toHaveBeenCalled()
+    expect(w.dispatch).not.toHaveBeenCalled()
+  })
+
+  test("a throwing dispatch never throws after the removal", async () => {
+    const w = makeWatcher()
+    w.dispatch.mockImplementationOnce(() => {
+      throw new Error("dispatch failed")
+    })
+    await w.update("suspected")
+
+    await w.answer(true)
+
+    expect(w.remove).toHaveBeenCalledTimes(1)
+    expect(w.dispatch).toHaveBeenCalledTimes(1)
+  })
+
+  test("a rejecting removal in the confirmed stage still leaves the dialog path working", async () => {
+    const w = makeWatcher()
+    w.remove.mockRejectedValue(new Error("remove failed"))
+
+    await w.update("confirmed", TWO_CREDENTIALS)
+
+    expect(w.remove).toHaveBeenCalledTimes(2)
+    expect(w.confirm).toHaveBeenCalledTimes(1)
+  })
+
+  test("updates for other integrations or without kiro do nothing", async () => {
+    const w = makeWatcher()
+
+    w.setIntegrations([{ id: "other", metadata: { kiroLoggedOut: { stage: "confirmed" } }, connections: [{ type: "credential", id: "x" }] }])
+    w.watcher.handle({})
+    await settle()
+    w.setIntegrations(undefined)
+    w.watcher.handle({})
+    await settle()
+    w.setIntegrations([])
+    w.watcher.handle({})
+    await settle()
+
+    expect(w.integrationSync).toHaveBeenCalledTimes(3)
+    expect(w.confirm).not.toHaveBeenCalled()
+    expect(w.remove).not.toHaveBeenCalled()
+    expect(w.dispatch).not.toHaveBeenCalled()
+  })
+
+  test("a malformed event payload is treated like an update for the context location", async () => {
+    const w = makeWatcher()
+    w.setIntegrations([kiroIntegration("suspected")])
+
+    expect(() => w.watcher.handle(undefined as never)).not.toThrow()
+    await settle()
+
+    expect(w.integrationSync).toHaveBeenCalledWith(LOCATION)
+    expect(w.confirm).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe("logout watcher: wiring through tui setup", () => {
+  test.each([
+    { source: "event", event: { location: { directory: "/other" } }, resolvedLocation: { directory: "/other" } },
+    { source: "context fallback", event: {}, resolvedLocation: LOCATION },
+  ])("the integration.updated listener refreshes by $source location, prompts and removes by credential id only", async ({ event, resolvedLocation }) => {
+    const mock = makeTuiContext({ withLogout: { location: LOCATION } })
+    const logout = mock.logout!
+    logout.confirm.mockResolvedValue(true)
+    logout.setIntegrations([kiroIntegration("suspected", TWO_CREDENTIALS)])
+    const cleanup = await setupPlugin(mock)
+    const listener = mock.listeners.find((entry) => entry.event === "integration.updated")
+    expect(listener).toBeDefined()
+
+    listener!.handler(event)
+    await settle()
+
+    expectIntegrationRefreshes(logout, [resolvedLocation])
+    expect(logout.confirm).toHaveBeenCalledTimes(1)
+    expect(logout.confirm).toHaveBeenCalledWith({ title: LOGOUT_DIALOG_TITLE, message: LOGOUT_DIALOG_MESSAGE })
+    expect(logout.remove).toHaveBeenCalledTimes(2)
+    expect(logout.remove.mock.calls).toEqual([[{ credentialID: "cred-1" }], [{ credentialID: "cred-2" }]])
+    expect(logout.dispatch).toHaveBeenCalledWith(PROVIDER_CONNECT_COMMAND)
+
+    await cleanup()
+    expect(listener!.unsubscribeCalls).toBe(1)
+  })
+
+  test("after cleanup the listener's handler drops updates", async () => {
+    const mock = makeTuiContext({ withLogout: { location: LOCATION } })
+    const logout = mock.logout!
+    logout.setIntegrations([kiroIntegration("confirmed", TWO_CREDENTIALS)])
+    const cleanup = await setupPlugin(mock)
+    const listener = mock.listeners.find((entry) => entry.event === "integration.updated")!
+
+    await cleanup()
+    listener.handler({})
+    await settle()
+
+    expect(logout.integrationInvalidate).not.toHaveBeenCalled()
+    expect(logout.integrationSync).not.toHaveBeenCalled()
+    expect(logout.remove).not.toHaveBeenCalled()
+    expect(logout.confirm).not.toHaveBeenCalled()
+  })
+})
+
 describe("theme feature detection", () => {
-  const THEME = { text: { default: "#e0e0e0", subdued: "#808080" } }
+  const THEME = { text: { base: "#e0e0e0", muted: "#808080" } }
   const KIRO_MESSAGES: Record<string, ReadonlyArray<FixtureMessage>> = {
     sess: [{ id: "msg_1", type: "assistant", content: [statePart("text", { credits: 2, creditsUnit: "credit" })] }],
   }
@@ -824,7 +1343,16 @@ describe("theme feature detection", () => {
   test("absent or misshapen theme falls back to default styling without throwing", async () => {
     // rendering never depends on the theme: no theme and junk themes
     // behave identically — no tokens, no fg, no throw
-    for (const theme of [undefined, null, 42, "dark", {}, { text: null }, { text: { default: "", subdued: 7 } }]) {
+    for (const theme of [
+      undefined,
+      null,
+      42,
+      "dark",
+      {},
+      { text: null },
+      { text: { base: "", muted: 7 } },
+      { text: { default: "#e0e0e0", subdued: "#808080" } },
+    ]) {
       const mock = makeTuiContext({ messages: KIRO_MESSAGES, ...(theme !== undefined ? { theme } : {}) })
       const cleanup = await setupPlugin(mock)
 
