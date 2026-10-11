@@ -11,7 +11,7 @@ host per release; later releases are not guaranteed to work. It is published to 
 `opencode-kiro@0.4.0`.
 Current pins: [docs/COMPATIBILITY.md](./docs/COMPATIBILITY.md).
 
-## [0.5.0] - Unreleased
+## [0.5.0] - 2026-10-11
 
 First stable OpenCode 2 release, with the same code as `0.5.0-beta.7`, tested on
 OpenCode 2.0.26. This release is published to npm `latest` from `main`.
