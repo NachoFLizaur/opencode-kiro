@@ -333,7 +333,7 @@ const hostSensitivePins = async (): Promise<Array<[name: string, version: string
   ]
 }
 
-const TESTED_OPENCODE_SHA = "84c9be93a56304a108f1a22df0c5d62c26d5b6ca"
+const TESTED_OPENCODE_SHA = "9b4ec5714d481559990db0a816d5dec19541a814"
 
 describe("packaging and docs invariants", () => {
   test("pack payload is dist-only", async () => {

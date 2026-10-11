@@ -5,11 +5,50 @@ All notable changes to `opencode-kiro` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-The `0.5.0` prerelease line targets **OpenCode 2 stable 2.x** with one tested host
-version per release. The plugin is still a prerelease and carries no stability
-promise. It does not work with OpenCode v1; v1 users should stay on
-`opencode-kiro@0.4.0` (the `main` branch / npm `latest` line).
+The `0.5.x` stable line targets **OpenCode 2 stable 2.0.x** with a tested reference
+host per release; later releases are not guaranteed to work. It is published to npm
+`latest` from `main`. It does not work with OpenCode v1; v1 users should pin
+`opencode-kiro@0.4.0`.
 Current pins: [docs/COMPATIBILITY.md](./docs/COMPATIBILITY.md).
+
+## [0.5.0] - Unreleased
+
+First stable OpenCode 2 release, with the same code as `0.5.0-beta.7`, tested on
+OpenCode 2.0.26. This release is published to npm `latest` from `main`.
+OpenCode v1 users should stay on `opencode-kiro@0.4.0`.
+
+### Compatibility
+
+| Item | Value |
+|---|---|
+| Tested OpenCode commit (`v2.0.26` tag) | `9b4ec5714d481559990db0a816d5dec19541a814` |
+| Package version | `0.5.0` |
+
+| Package | Pinned version | Where |
+|---|---|---|
+| `@opencode/plugin` | `2.0.20` | devDependencies (exact; types and tests only); no peer dependency |
+| `@opentui/solid` | `0.5.12` | dependencies (exact; bundler-external, never bundled) |
+| `solid-js` | `1.9.12` | dependencies (exact; bundler-external, never bundled) |
+| `kiro-acp-ai-provider` | `3.3.0` | dependencies (exact) |
+
+Targets OpenCode 2 stable 2.0.x, with `@opencode/cli@2.0.26` as the reference host;
+later releases are not guaranteed to work. Pin the install to `opencode-kiro@0.5.0`.
+
+### Fixed
+
+- **Docs: host updates and plugin cache paths.** The host checks unpinned specs
+  (bare, tag or range) for newer versions in the background and marks them outdated;
+  it installs an update only when you trigger one (or after the cache is cleared).
+  An exact version is never re-resolved, keeping installs reproducible. OpenCode 2
+  caches npm plugins under
+  `${XDG_CACHE_HOME:-$HOME/.cache}/opencode/npm/<name>@<spec>/<generation>/`, with the
+  installed package in that generation's `node_modules/<name>`. Cache-clear and
+  verification commands now use this location and include server restart guidance.
+
+### Known limitations
+
+The limitations listed under [0.5.0-beta.7](#050-beta7---2026-10-01) still apply,
+including context loss in conversations without tools and after compaction.
 
 ## [0.5.0-beta.7] - 2026-10-01
 
@@ -644,6 +683,7 @@ v1 plugin contract throughout: singular `plugin` arrays in `opencode.json` and
 `tui.json`, the `opencode plugin opencode-kiro` installer, and `part.metadata.kiro`
 credits. Full documentation: the README at the `v0.4.0` tag.
 
+[0.5.0]: https://www.npmjs.com/package/opencode-kiro/v/0.5.0
 [0.5.0-beta.7]: https://www.npmjs.com/package/opencode-kiro/v/0.5.0-beta.7
 [0.5.0-beta.5]: https://www.npmjs.com/package/opencode-kiro/v/0.5.0-beta.5
 [0.5.0-beta.4]: https://www.npmjs.com/package/opencode-kiro/v/0.5.0-beta.4
