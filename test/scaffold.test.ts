@@ -182,7 +182,7 @@ describe("dependency pins and installed plugin API", () => {
       [pkg.devDependencies, "@opencode/plugin", "2.0.20"],
       [pkg.dependencies, "@opentui/solid", "0.5.12"],
       [pkg.dependencies, "solid-js", "1.9.12"],
-      [pkg.dependencies, "kiro-acp-ai-provider", "3.3.0"],
+      [pkg.dependencies, "kiro-acp-ai-provider", "3.3.1"],
     ]
 
     for (const [block, name, version] of expected) {
@@ -333,7 +333,7 @@ const hostSensitivePins = async (): Promise<Array<[name: string, version: string
   ]
 }
 
-const TESTED_OPENCODE_SHA = "9b4ec5714d481559990db0a816d5dec19541a814"
+const TESTED_OPENCODE_SHA = "042d0832f5f3a73eaa039a58a7d565776f6d4290"
 
 describe("packaging and docs invariants", () => {
   test("pack payload is dist-only", async () => {

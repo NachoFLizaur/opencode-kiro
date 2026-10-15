@@ -11,6 +11,57 @@ host per release; later releases are not guaranteed to work. It is published to 
 `opencode-kiro@0.4.0`.
 Current pins: [docs/COMPATIBILITY.md](./docs/COMPATIBILITY.md).
 
+## [0.5.1] - Unreleased
+
+Patch release that moves `kiro-acp-ai-provider` to `3.3.1`, tested on OpenCode 2.0.29.
+No plugin code changes. This release is published to npm `latest` from `main`.
+OpenCode v1 users should stay on `opencode-kiro@0.4.0`.
+
+### Compatibility
+
+| Item | Value |
+|---|---|
+| Tested OpenCode commit (`v2.0.29` tag) | `042d0832f5f3a73eaa039a58a7d565776f6d4290` |
+| Package version | `0.5.1` |
+
+| Package | Pinned version | Where |
+|---|---|---|
+| `@opencode/plugin` | `2.0.20` | devDependencies (exact; types and tests only); no peer dependency |
+| `@opentui/solid` | `0.5.12` | dependencies (exact; bundler-external, never bundled) |
+| `solid-js` | `1.9.12` | dependencies (exact; bundler-external, never bundled) |
+| `kiro-acp-ai-provider` | `3.3.1` | dependencies (exact; moved from `3.3.0`) |
+
+Targets OpenCode 2 stable 2.0.x, with `@opencode/cli@2.0.29` as the reference host;
+later releases are not guaranteed to work. Pin the install to `opencode-kiro@0.5.1`.
+
+### Fixed
+
+- **System prompt sent once per Kiro session.** The system prompt is sent once
+  per Kiro session instead of with every prompt, so each turn no longer adds
+  another copy (about 4.5k tokens with OpenCode) to the session's history. It is
+  sent again when it changes, after Kiro compacts or clears the session, after
+  kiro-cli restarts, after a cancelled or failed send, and on every prompt at or
+  above 70% context usage.
+- **No shutdown hang on Bun 1.4.** Stopping the provider no longer hangs when an
+  IPC tool-bridge connection is still open.
+
+### Changed
+
+- **Agent prompt wording.** The Kiro agent prompt written by
+  `kiro-acp-ai-provider` now tells the model that OpenCode's earlier instructions
+  stay in force until newer ones arrive, to match the once-per-session delivery
+  above. If you override it with an `agentPrompt` provider setting, remove any
+  wording that says instructions come with each request. `agentPrompt` is not a
+  plugin option; the plugin ignores it in `plugins[].options`.
+
+### Known limitations
+
+- If Kiro compacts during a long tool loop below 70% context usage, OpenCode's
+  instructions can be missing for the rest of that turn; they are sent again with
+  the next prompt.
+- The limitations listed under [0.5.0-beta.7](#050-beta7---2026-10-01) still apply,
+  including context loss in conversations without tools and after compaction.
+
 ## [0.5.0] - 2026-10-11
 
 First stable OpenCode 2 release, with the same code as `0.5.0-beta.7`, tested on
@@ -683,6 +734,7 @@ v1 plugin contract throughout: singular `plugin` arrays in `opencode.json` and
 `tui.json`, the `opencode plugin opencode-kiro` installer, and `part.metadata.kiro`
 credits. Full documentation: the README at the `v0.4.0` tag.
 
+[0.5.1]: https://www.npmjs.com/package/opencode-kiro/v/0.5.1
 [0.5.0]: https://www.npmjs.com/package/opencode-kiro/v/0.5.0
 [0.5.0-beta.7]: https://www.npmjs.com/package/opencode-kiro/v/0.5.0-beta.7
 [0.5.0-beta.5]: https://www.npmjs.com/package/opencode-kiro/v/0.5.0-beta.5

@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-Only the latest published version of each active line on npm receives security fixes: `0.4.0` is the stable v1 line and `0.5.0-beta.x` is the v2 prerelease line. Check the npm dist-tags and the release notes in this repo for the current versions, and please upgrade before reporting.
+Only the latest published version of each active line on npm receives security fixes: `0.5.x` is the stable OpenCode 2 line on npm `latest`, and OpenCode v1 users stay on `0.4.0`. Check the npm dist-tags and the release notes in this repo for the current versions, and please upgrade before reporting.
 
 ## Scope and threat model
 

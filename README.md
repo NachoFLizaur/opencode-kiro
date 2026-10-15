@@ -1,6 +1,6 @@
 # opencode-kiro
 
-> **0.5.x is the stable OpenCode 2 line**, tested on **2.0.26**.
+> **0.5.x is the stable OpenCode 2 line**, tested on **2.0.29**.
 > **OpenCode v1 users should pin `opencode-kiro@0.4.0`.**
 > See [docs/COMPATIBILITY.md](./docs/COMPATIBILITY.md) for exact pins and the tested OpenCode SHA.
 
@@ -28,20 +28,20 @@ with no credential scraping and no reuse of Kiro credentials against other provi
 
 ## Compatibility
 
-This release is tested against **OpenCode 2 stable 2.0.26**:
+This release is tested against **OpenCode 2 stable 2.0.29**:
 
 | Item | Value | Notes |
 |---|---|---|
-| Tested OpenCode commit (`v2.0.26` tag) | `9b4ec5714d481559990db0a816d5dec19541a814` | |
+| Tested OpenCode commit (`v2.0.29` tag) | `042d0832f5f3a73eaa039a58a7d565776f6d4290` | |
 | `@opencode/plugin` | `2.0.20` | devDependencies (exact; types and tests only); no peer dependency |
-| Package version | `0.5.0` | |
+| Package version | `0.5.1` | |
 
 Full pin table and verification steps: [docs/COMPATIBILITY.md](./docs/COMPATIBILITY.md).
-**Targets OpenCode 2 stable 2.0.x**, with `@opencode/cli@2.0.26` as the reference host.
-0.5.0 is tested on 2.0.26; later releases are not guaranteed to work. No peer
+**Targets OpenCode 2 stable 2.0.x**, with `@opencode/cli@2.0.29` as the reference host.
+0.5.1 is tested on 2.0.29; later releases are not guaranteed to work. No peer
 dependency is declared because the host supplies the plugin API at runtime.
 Older hosts, including build `0.0.0-beta-19271` from the
-former CLI package scope, are **not supported by 0.5.0**; use
+former CLI package scope, are **not supported by 0.5.1**; use
 `opencode-kiro@0.5.0-beta.5` on those hosts. There is no `engines.opencode` constraint.
 
 ## Prerequisites
@@ -50,7 +50,7 @@ former CLI package scope, are **not supported by 0.5.0**; use
 |---|---|
 | [kiro-cli](https://kiro.dev/docs/cli/) | Must be installed and on `PATH`; a Kiro subscription / AWS Builder ID account |
 | [Node.js](https://nodejs.org) `>= 20` | Enforced via `engines.node`. |
-| OpenCode 2 stable 2.0.x, tested on 2.0.26 | Later releases are not guaranteed to work. See [Compatibility](#compatibility) for the reference host and development pin. This release does not support OpenCode v1. |
+| OpenCode 2 stable 2.0.x, tested on 2.0.29 | Later releases are not guaranteed to work. See [Compatibility](#compatibility) for the reference host and development pin. This release does not support OpenCode v1. |
 
 OpenTUI 0.5.12 (`@opentui/core`, pulled in by `@opentui/solid`)
 declares `node >=26.4.0`, so an install with `engine-strict` enabled refuses older
@@ -65,7 +65,7 @@ global `~/.config/opencode/opencode.json`:
 
 ```json
 {
-  "plugins": ["opencode-kiro@0.5.0"]
+  "plugins": ["opencode-kiro@0.5.1"]
 }
 ```
 
@@ -74,7 +74,7 @@ global `~/.config/opencode/opencode.json`:
 > background and marks them outdated; it installs an update only when you trigger
 > one (`opencode2 plugin update`, or the update action in the TUI Plugins dialog)
 > or after the cache is cleared. An exact version is never re-resolved.
-> Use the exact `opencode-kiro@0.5.0` spec.
+> Use the exact `opencode-kiro@0.5.1` spec.
 
 The object form pins the same version and takes the plugin options described in
 [Plugin options](#plugin-options):
@@ -83,7 +83,7 @@ The object form pins the same version and takes the plugin options described in
 {
   "plugins": [
     {
-      "package": "opencode-kiro@0.5.0",
+      "package": "opencode-kiro@0.5.1",
       "options": {}
     }
   ]
@@ -111,7 +111,7 @@ directory; omit the `options` object entirely to get the defaults.
 {
   "plugins": [
     {
-      "package": "opencode-kiro@0.5.0",
+      "package": "opencode-kiro@0.5.1",
       "options": {
         "agent": "opencode",
         "mcpTimeout": 45,
@@ -170,7 +170,7 @@ option controls how the plugin surfaces that wait:
 {
   "plugins": [
     {
-      "package": "opencode-kiro@0.5.0",
+      "package": "opencode-kiro@0.5.1",
       "options": { "stall": { "live": "off" } }
     }
   ]
@@ -191,7 +191,7 @@ activates either:
 
 ```json
 {
-  "plugins": ["opencode-kiro@0.5.0", "-kiro"]
+  "plugins": ["opencode-kiro@0.5.1", "-kiro"]
 }
 ```
 
@@ -222,11 +222,11 @@ with `npm run build` after edits. Options also work with the object form's `pack
 set to this directory path.
 
 **Tarball caveat (`name@file:` only):** if you instead run `npm pack` and configure
-`opencode-kiro@file:/absolute/path/to/opencode-kiro-0.5.0.tgz`, the colon in the
+`opencode-kiro@file:/absolute/path/to/opencode-kiro-0.5.1.tgz`, the colon in the
 installed directory name defeats the host's OpenTUI loader shim. The plugin's slots
 show a contained error notice instead of the credits views; the rest of the TUI
 keeps working. Use the colon-free absolute `dist/` directory example above or a
-registry install (`opencode-kiro@0.5.0`) to avoid this tarball-specific issue.
+registry install (`opencode-kiro@0.5.1`) to avoid this tarball-specific issue.
 
 For package installs, the host resolves the `./server` and `./tui` exports. Each
 entry module exports its own `id`: the server plugin's id is `kiro` and the TUI
@@ -372,8 +372,8 @@ double-counted. See [CHANGELOG.md](./CHANGELOG.md) for details.
 - **Reduced toast feedback.** Auth-flow feedback is delivered as connect-flow text
   rather than toasts; this plugin's core deliberately does not depend on the churning
   TUI toast API.
-- **Tested reference host.** 0.5.0 targets OpenCode 2 stable 2.0.x and is tested
-  on 2.0.26; later releases are not guaranteed to work. No peer dependency is
+- **Tested reference host.** 0.5.1 targets OpenCode 2 stable 2.0.x and is tested
+  on 2.0.29; later releases are not guaranteed to work. No peer dependency is
   declared; the host supplies the plugin API at runtime. The exact development
   pin is for types and tests only. See [Compatibility](#compatibility).
 
@@ -431,7 +431,7 @@ double-counted. See [CHANGELOG.md](./CHANGELOG.md) for details.
 | Spinner with no output for a long time | The Kiro backend is likely overloaded and kiro-cli is retrying the request. With the default `stall` option a collapsed reasoning block saying so appears in the transcript after 10 seconds (only when thinking is shown; see [Slow responses](#slow-responses)). Its closing line reports the duration and, when available from kiro-cli's log, a reason such as `ModelOverloaded`. If no such block appears and the model list or effort variants are also missing, discovery may be the problem instead: watch the server log (`OPENCODE_PRINT_LOGS=1`, or run under `opencode serve`) for `[opencode-kiro]` lines. kiro-cli's own errors are in its log under your temp directory (`kiro-log/kiro-chat.log`). |
 | Local plugin does not load | Run `npm run build` and configure the absolute `dist/` directory path, not the package root or a direct `.js` file. The host resolves `server.js` and `tui.js` inside that directory; both entry modules export their own ids. |
 | Provider visible but runs fail | The provider can be selectable before any credential exists. Run `opencode auth login` first. |
-| Worked yesterday, broken today | 0.5.0 targets OpenCode 2 stable 2.0.x and is tested on 2.0.26; later releases are not guaranteed to work (see [Compatibility](#compatibility)). If your OpenCode build moved past the tested SHA, the v2 plugin surface may have changed underneath it. Another possible cause is an **unpinned** `plugins` entry: the host checks unpinned specs (bare, tag or range) for newer versions in the background and marks them outdated; it installs an update only when you trigger one (or after the cache is cleared), which can move the plugin off the tested build. An exact version is never re-resolved - pin the exact `opencode-kiro@0.5.0` spec for reproducible installs. |
+| Worked yesterday, broken today | 0.5.1 targets OpenCode 2 stable 2.0.x and is tested on 2.0.29; later releases are not guaranteed to work (see [Compatibility](#compatibility)). If your OpenCode build moved past the tested SHA, the v2 plugin surface may have changed underneath it. Another possible cause is an **unpinned** `plugins` entry: the host checks unpinned specs (bare, tag or range) for newer versions in the background and marks them outdated; it installs an update only when you trigger one (or after the cache is cleared), which can move the plugin off the tested build. An exact version is never re-resolved - pin the exact `opencode-kiro@0.5.1` spec for reproducible installs. |
 
 ## Legacy: v1 / OpenCode v1 users (`0.4.0`)
 
@@ -440,7 +440,7 @@ v1 (`opencode >= 1.16.0`). It uses the v1 contract throughout: singular `plugin`
 arrays in `opencode.json` and `tui.json`, the `opencode plugin opencode-kiro`
 installer, and `part.metadata.kiro` credits. Its full documentation is the README at
 the [`v0.4.0` tag](https://github.com/NachoFLizaur/opencode-kiro/tree/v0.4.0).
-Do not install `0.5.0` into an OpenCode v1 setup.
+Do not install `0.5.1` into an OpenCode v1 setup.
 
 ## Development
 
