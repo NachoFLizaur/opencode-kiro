@@ -39,7 +39,7 @@ Runtime model discovery changes must treat the SDK's normalized `runtimeEfforts`
 
 ## Running the plugin locally against opencode
 
-Use OpenCode 2 stable `@opencode/cli@2.0.29`, the tested reference host for 0.5.1. 0.5.1 targets OpenCode 2 stable 2.0.x and is tested on 2.0.29; later releases are not guaranteed to work. No peer dependency is declared because the host supplies the plugin API at runtime. See [docs/COMPATIBILITY.md](./docs/COMPATIBILITY.md) for details. OpenCode v1 users should pin `opencode-kiro@0.4.0`. Older OpenCode 2 hosts, including the former-scope CLI build `0.0.0-beta-19271`, are not supported by 0.5.1; use `opencode-kiro@0.5.0-beta.5` there.
+Use OpenCode 2 stable `@opencode/cli@2.0.29`, the tested reference host for 0.5.2. 0.5.2 targets OpenCode 2 stable 2.0.x and is tested on 2.0.29; later releases are not guaranteed to work. No peer dependency is declared because the host supplies the plugin API at runtime. See [docs/COMPATIBILITY.md](./docs/COMPATIBILITY.md) for details. OpenCode v1 users should pin `opencode-kiro@0.4.0`. Older OpenCode 2 hosts, including the former-scope CLI build `0.0.0-beta-19271`, are not supported by 0.5.2; use `opencode-kiro@0.5.0-beta.5` there.
 
 Build first, then reference the absolute built `dist/` directory with ONE `plugins` entry in `opencode.json` (the project's `.opencode/opencode.json` or the global `~/.config/opencode/opencode.json`). The host resolves `server.js` and `tui.js` inside that directory, so the TUI half (sidebar credits box and footer chip) loads from the same entry. For package installs, the host discovers it from the `./tui` export; there is no `tui` property or `cli.json` step. If a `cli.json` `plugins` entry is left over from `0.5.0-beta.1`, remove it:
 
@@ -146,7 +146,7 @@ Examples:
 
 Maintainer notes for the `0.5.x` stable OpenCode 2 line on `main`.
 
-- **Stable OpenCode 2 releases use `latest`.** Merge to `main` before publishing `0.5.1`. OpenCode v1 users stay on the exact `opencode-kiro@0.4.0` pin; `latest` now follows the OpenCode 2 line:
+- **Stable OpenCode 2 releases use `latest`.** Merge to `main` before publishing `0.5.2`. OpenCode v1 users stay on the exact `opencode-kiro@0.4.0` pin; `latest` now follows the OpenCode 2 line:
 
   ```bash
   npm publish
@@ -155,4 +155,4 @@ Maintainer notes for the `0.5.x` stable OpenCode 2 line on `main`.
 - **Exact development pin, no peer dependency.** Keep the `@opencode/plugin` development pin exactly `2.0.20` for types and tests only. Do not declare a peer dependency: the host supplies the plugin API at runtime. Keep `@opentui/solid`, `solid-js`, and `kiro-acp-ai-provider` pinned to exact version strings. Never use dist-tags for these packages. When re-pinning, verify the installed `@opencode/plugin` tarball matches the tested OpenCode contract (exports map, TUI slot types, event union) and keep `docs/COMPATIBILITY.md`, the current `CHANGELOG.md` section, and the README in step; `test/scaffold.test.ts` fails on any drift between them and `package.json`.
 - **Before publishing.** Run `npm run typecheck` and `npm test` (the suite includes a real `npm pack` and a hermetic install), then run the built tarball against the tested OpenCode commit end to end (auth, model discovery, effort on the wire, credits surfaces). Fill the version's `CHANGELOG.md` section and update `docs/COMPATIBILITY.md` before the pack, since README and docs are part of the release tree.
 - **After publishing.** Confirm `npm view opencode-kiro dist-tags` shows `latest` on the new version, and that the registry `dist.shasum` matches the pre-flight `npm pack` shasum.
-- **Compatibility and known limitations.** `0.5.0` is the first stable OpenCode 2 release, tested on OpenCode 2.0.26; `0.5.1` is tested on 2.0.29. Keep the known limitations documented, including the live text-credits workaround. Do not claim compatibility with untested later hosts or OpenCode v1; check upgrades from `0.4.0` when changing migration guidance.
+- **Compatibility and known limitations.** `0.5.0` is the first stable OpenCode 2 release, tested on OpenCode 2.0.26; `0.5.1` and `0.5.2` are tested on 2.0.29. Keep the known limitations documented, including the live text-credits workaround. Do not claim compatibility with untested later hosts or OpenCode v1; check upgrades from `0.4.0` when changing migration guidance.

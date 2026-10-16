@@ -221,6 +221,7 @@ async function authorize(resources: AuthResources, onAuthenticated: () => void):
   // (matches the SDK's spawns); shell:false elsewhere
   resources.child = execFile("kiro-cli", ["login"], {
     shell: process.platform === "win32",
+    windowsHide: true, // no empty console window when the host has none
   })
 
   const callback = pollForLogin(verifyAuthAsync, resources, onAuthenticated)

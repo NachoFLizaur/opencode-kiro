@@ -1,6 +1,6 @@
 # Compatibility
 
-`opencode-kiro` `0.5.1` is tested against OpenCode 2 stable
+`opencode-kiro` `0.5.2` is tested against OpenCode 2 stable
 `2.0.29`. OpenCode v1 users should pin `opencode-kiro@0.4.0`.
 This file records the pins; the same values are asserted against
 `package.json` by `test/scaffold.test.ts`.
@@ -10,9 +10,9 @@ This file records the pins; the same values are asserted against
 | Item | Value |
 |---|---|
 | Tested OpenCode commit (`v2.0.29` tag) | `042d0832f5f3a73eaa039a58a7d565776f6d4290` |
-| Package version | `0.5.1` |
+| Package version | `0.5.2` |
 
-0.5.1 targets OpenCode 2 stable 2.0.x with the provider-domain plugin contract and
+0.5.2 targets OpenCode 2 stable 2.0.x with the provider-domain plugin contract and
 `@opencode/cli@2.0.29` as the reference host. Older hosts, including the former-scope
 CLI build `0.0.0-beta-19271`, are not supported; use `opencode-kiro@0.5.0-beta.5`
 there. There is no `engines.opencode` constraint.
@@ -26,13 +26,13 @@ there. There is no `engines.opencode` constraint.
 | `@opencode/plugin` | `2.0.20` | devDependencies (exact; types and tests only); no peer dependency |
 | `@opentui/solid` | `0.5.12` | dependencies (exact; bundler-external, never bundled) |
 | `solid-js` | `1.9.12` | dependencies (exact; bundler-external, never bundled) |
-| `kiro-acp-ai-provider` | `3.3.1` | dependencies (exact) |
+| `kiro-acp-ai-provider` | `3.3.2` | dependencies (exact) |
 
 ## Development pins and host compatibility
 
 The exact development pin `@opencode/plugin` `2.0.20` is for types and tests only.
 No peer dependency is declared because the host supplies the plugin API at runtime.
-0.5.1 targets OpenCode 2 stable 2.0.x and is tested on 2.0.29;
+0.5.2 targets OpenCode 2 stable 2.0.x and is tested on 2.0.29;
 later releases are not guaranteed to work.
 `@opentui/solid` peers an exact `solid-js` version, so both stay pinned;
 `kiro-acp-ai-provider` also keeps an exact dependency pin. No dist-tags or
@@ -64,14 +64,14 @@ the plugin.
    after the cache is cleared). An exact version is never re-resolved:
 
    ```json
-   { "plugins": ["opencode-kiro@0.5.1"] }
+   { "plugins": ["opencode-kiro@0.5.2"] }
    ```
 
 2. Check the host version with `opencode --version` (or the executable your OpenCode
    2 host installs, such as `opencode2`). The reference package is `@opencode/cli@2.0.29`, which
    reports `opencode v2.0.29`. For a source-built host, run `git rev-parse HEAD`
    in its checkout and compare it with the `v2.0.29` tag commit above.
-   0.5.1 targets OpenCode 2 stable 2.0.x, but later releases than the tested
+   0.5.2 targets OpenCode 2 stable 2.0.x, but later releases than the tested
    2.0.29 are not guaranteed to work.
 3. Confirm the installed pins match this table from the latest numeric cache
    generation's root. OpenCode 2 caches npm plugins under
@@ -80,7 +80,7 @@ the plugin.
    Run `npm ls` from the generation's root, not `node_modules/opencode-kiro`:
 
    ```bash
-   ( G="${XDG_CACHE_HOME:-$HOME/.cache}/opencode/npm/opencode-kiro@0.5.1"; N="$(ls "$G" 2>/dev/null | grep -E '^[0-9]+$' | sort -n | tail -1)"; [ -n "$N" ] && cd "$G/$N" && npm ls kiro-acp-ai-provider @opentui/solid solid-js ) || echo "no cached generation found"
+   ( G="${XDG_CACHE_HOME:-$HOME/.cache}/opencode/npm/opencode-kiro@0.5.2"; N="$(ls "$G" 2>/dev/null | grep -E '^[0-9]+$' | sort -n | tail -1)"; [ -n "$N" ] && cd "$G/$N" && npm ls kiro-acp-ai-provider @opentui/solid solid-js ) || echo "no cached generation found"
    ```
 
    `npm ls` may report unrelated tree warnings; only the three version numbers matter.

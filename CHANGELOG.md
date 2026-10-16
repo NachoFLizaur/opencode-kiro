@@ -11,7 +11,39 @@ host per release; later releases are not guaranteed to work. It is published to 
 `opencode-kiro@0.4.0`.
 Current pins: [docs/COMPATIBILITY.md](./docs/COMPATIBILITY.md).
 
-## [0.5.1] - Unreleased
+## [0.5.2] - 2026-10-16
+
+Patch release that moves `kiro-acp-ai-provider` to `3.3.2` and fixes empty console
+windows on Windows. Same tested host as 0.5.1, OpenCode 2.0.29. This release is
+published to npm `latest` from `main`.
+OpenCode v1 users should stay on `opencode-kiro@0.4.0`.
+
+### Compatibility
+
+| Item | Value |
+|---|---|
+| Tested OpenCode commit (`v2.0.29` tag) | `042d0832f5f3a73eaa039a58a7d565776f6d4290` |
+| Package version | `0.5.2` |
+
+| Package | Pinned version | Where |
+|---|---|---|
+| `@opencode/plugin` | `2.0.20` | devDependencies (exact; types and tests only); no peer dependency |
+| `@opentui/solid` | `0.5.12` | dependencies (exact; bundler-external, never bundled) |
+| `solid-js` | `1.9.12` | dependencies (exact; bundler-external, never bundled) |
+| `kiro-acp-ai-provider` | `3.3.2` | dependencies (exact; moved from `3.3.1`) |
+
+Targets OpenCode 2 stable 2.0.x, with `@opencode/cli@2.0.29` as the reference host;
+later releases are not guaranteed to work. Pin the install to `opencode-kiro@0.5.2`.
+
+### Fixed
+
+- **No empty console windows on Windows.** When OpenCode runs in its background
+  service (the default for the TUI and Desktop), Kiro no longer opens empty console
+  windows on connect, before prompts or during login. The plugin's `kiro-cli login`
+  now starts with a hidden console, and `kiro-acp-ai-provider` 3.3.2 does the same
+  for the kiro-cli processes it starts. Browser login works as before.
+
+## [0.5.1] - 2026-10-15
 
 Patch release that moves `kiro-acp-ai-provider` to `3.3.1`, tested on OpenCode 2.0.29.
 No plugin code changes. This release is published to npm `latest` from `main`.
@@ -734,6 +766,7 @@ v1 plugin contract throughout: singular `plugin` arrays in `opencode.json` and
 `tui.json`, the `opencode plugin opencode-kiro` installer, and `part.metadata.kiro`
 credits. Full documentation: the README at the `v0.4.0` tag.
 
+[0.5.2]: https://www.npmjs.com/package/opencode-kiro/v/0.5.2
 [0.5.1]: https://www.npmjs.com/package/opencode-kiro/v/0.5.1
 [0.5.0]: https://www.npmjs.com/package/opencode-kiro/v/0.5.0
 [0.5.0-beta.7]: https://www.npmjs.com/package/opencode-kiro/v/0.5.0-beta.7
